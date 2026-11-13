@@ -3,6 +3,7 @@ from pathlib import Path
 import pytest
 
 from bench import TaskResult, Workspace
+from test_workspace_config import set_setting
 
 
 def result(**overrides) -> TaskResult:
@@ -101,3 +102,38 @@ def test_quality_is_the_average_of_the_tasks_criteria(workspace_dir: Path):
     task = ws.score([result(criterion_scores=scores)]).tasks[0]
 
     assert task.dimensions["quality"] == pytest.approx(3.5)
+
+
+def mixed_result() -> TaskResult:
+    """Quality 4, Edit distance 5, Time saved 3, Cost/latency 5."""
+    return result(
+        criterion_scores={"correctness": 4, "clarity": 4},
+        edit_distance=0.0,
+        active_seconds=2160,
+        manual_minutes=60,
+        cost_usd=0.0,
+        latency_seconds=10,
+    )
+
+
+def test_task_weighted_score_uses_default_weights(workspace_dir: Path):
+    ws = Workspace.open(workspace_dir)
+
+    task = ws.score([mixed_result()]).tasks[0]
+
+    # (50*4 + 20*5 + 20*3 + 10*5) / 100
+    assert task.weighted == pytest.approx(4.1)
+
+
+def test_task_weighted_score_follows_edited_weights(workspace_dir: Path):
+    set_setting(
+        workspace_dir,
+        "weights",
+        "{quality: 25, edit_distance: 25, time_saved: 50, cost_latency: 0}",
+    )
+    ws = Workspace.open(workspace_dir)
+
+    task = ws.score([mixed_result()]).tasks[0]
+
+    # (25*4 + 25*5 + 50*3 + 0*5) / 100
+    assert task.weighted == pytest.approx(3.75)

@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from statistics import mean
 
 from bench.core.results import TaskResult
-from bench.core.settings import Band, Settings
+from bench.core.settings import DIMENSIONS, Band, Settings
 
 
 @dataclass(frozen=True)
@@ -16,6 +16,7 @@ class TaskScore:
     track: str
     dimensions: dict[str, float]
     latency_only: bool  # no per-Task cost: Cost/latency is the latency score alone
+    weighted: float  # weighted total of the Dimension scores, 1-5
 
 
 @dataclass(frozen=True)
@@ -46,18 +47,25 @@ def cost_latency(settings: Settings, result: TaskResult) -> float:
     return (band_score(bands["cost"], result.cost_usd) + latency) / 2
 
 
+def weighted(settings: Settings, dimensions: dict[str, float]) -> float:
+    """Weighted total of 1-5 Dimension scores; weights are percents summing to 100."""
+    return sum(settings.weights[d] * dimensions[d] for d in DIMENSIONS) / 100
+
+
 def score_task(settings: Settings, result: TaskResult) -> TaskScore:
     bands = settings.normalization
+    dimensions = {
+        "quality": mean(result.criterion_scores.values()),
+        "edit_distance": band_score(bands["edit_distance"], result.edit_distance),
+        "time_saved": band_score(bands["time_saved"], time_saved(result)),
+        "cost_latency": cost_latency(settings, result),
+    }
     return TaskScore(
         task_id=result.task_id,
         track=result.track,
-        dimensions={
-            "quality": mean(result.criterion_scores.values()),
-            "edit_distance": band_score(bands["edit_distance"], result.edit_distance),
-            "time_saved": band_score(bands["time_saved"], time_saved(result)),
-            "cost_latency": cost_latency(settings, result),
-        },
+        dimensions=dimensions,
         latency_only=result.cost_usd is None,
+        weighted=weighted(settings, dimensions),
     )
 
 
