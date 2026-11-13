@@ -267,19 +267,23 @@ def create_run(
 
 
 def _snapshot(run: Run) -> dict[str, Any]:
-    c = run.candidate
     return {
         "id": run.id,
         "date": run.date.isoformat(),
         "suite": str(run.suite),
-        "candidate": {
-            "id": c.id,
-            "tool": c.tool,
-            "version": c.version,
-            "adapter": c.adapter,
-            "settings": c.settings,
-        },
+        "candidate": _candidate_snapshot(run.candidate),
         "tasks": run.task_versions,
+    }
+
+
+def _candidate_snapshot(c: Candidate) -> dict[str, Any]:
+    """What a Run freezes of its Candidate (ADR-0003): any change here is a new Candidate."""
+    return {
+        "id": c.id,
+        "tool": c.tool,
+        "version": c.version,
+        "adapter": c.adapter,
+        "settings": c.settings,
     }
 
 
@@ -296,10 +300,7 @@ def open_run(
     snapshot = yaml.safe_load((folder / RUN_FILE).read_text())
     snapped = snapshot["candidate"]
     candidate = candidates.get(snapped["id"])
-    if candidate is None or (candidate.version, candidate.settings) != (
-        snapped["version"],
-        snapped["settings"],
-    ):
+    if candidate is None or _candidate_snapshot(candidate) != snapped:
         raise RunMismatch(f"Run {run_id}: Candidate {snapped['id']} is missing or has changed")
     check_gate(candidate)
     by_id = {t.id: t for t in workspace_tasks}

@@ -302,6 +302,24 @@ def test_task_input_for_a_task_the_workspace_does_not_have_is_unknown(ws_dir: Pa
         ws.task_input(run, "T9.9")
 
 
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"tool": "Claude Code"},
+        {"version": "claude-opus-5-6"},
+        {"adapter": "manual_assisted"},
+        {"settings": {"temperature": 0.7, "max_tokens": 4000}},
+    ],
+    ids=["tool", "version", "adapter", "settings"],
+)
+def test_a_run_cannot_resume_once_its_candidate_snapshot_has_changed(ws_dir: Path, change):
+    run = Workspace.open(ws_dir).start_run("claude@opus-5-5", on=DAY)
+    write_candidate(ws_dir, "claude@opus-5-5", cleared("public_only", baseline=True, **change))
+
+    with pytest.raises(RunMismatch, match="claude@opus-5-5"):
+        Workspace.open(ws_dir).resume_run(run.id)
+
+
 def test_resuming_an_unknown_run_fails(ws_dir: Path):
     with pytest.raises(LookupError, match="2026-01-01-nope@1"):
         Workspace.open(ws_dir).resume_run("2026-01-01-nope@1")
