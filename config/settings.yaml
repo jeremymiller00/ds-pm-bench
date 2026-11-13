@@ -6,3 +6,17 @@ weights:
   edit_distance: 20
   time_saved: 20
   cost_latency: 10
+
+# Adopt rule margins, in Quality points on the 1-5 scale.
+# Regression: a Track whose quality is more than this below the Baseline's.
+regression_margin: 0.5
+# Re-test: a weighted score within this of the Baseline's.
+retest_margin: 0.2
+
+# Share of a Run's Outputs queued for a human Spot-check (3 of 12).
+spot_check_rate: 0.25
+
+# Judge Certification thresholds against the Calibration Set.
+calibration:
+  within_one_point: 0.9   # share of scores within 1 point of the human score
+  weighted_kappa: 0.6     # minimum weighted kappa per Criterion

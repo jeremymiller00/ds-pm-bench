@@ -16,8 +16,18 @@ DIMENSIONS = ("quality", "edit_distance", "time_saved", "cost_latency")
 
 
 @dataclass(frozen=True)
+class CalibrationThresholds:
+    within_one_point: float
+    weighted_kappa: float
+
+
+@dataclass(frozen=True)
 class Settings:
     weights: dict[str, int | float]
+    regression_margin: float
+    retest_margin: float
+    spot_check_rate: float
+    calibration: CalibrationThresholds
 
 
 class _Fields:
@@ -41,6 +51,12 @@ class _Fields:
             raise self.fail(field, f"must be at least {minimum}, got {value}")
         return value
 
+    def fraction(self, value: Any, field: str) -> float:
+        number = self.number(value, field)
+        if not 0 <= number <= 1:
+            raise self.fail(field, f"must be between 0 and 1, got {number}")
+        return number
+
     def exact_keys(self, data: dict[str, Any], field: str, keys: tuple[str, ...]) -> None:
         for key in data:
             if key not in keys:
@@ -53,7 +69,24 @@ class _Fields:
 def load_settings(root: Path) -> Settings:
     f = _Fields(SETTINGS_FILE)
     data = f.mapping(yaml.safe_load((root / SETTINGS_FILE).read_text()), "(root)")
-    return Settings(weights=_weights(f, data.get("weights")))
+    calibration = f.mapping(data.get("calibration"), "calibration")
+    f.exact_keys(calibration, "calibration", ("within_one_point", "weighted_kappa"))
+    return Settings(
+        weights=_weights(f, data.get("weights")),
+        regression_margin=f.number(
+            data.get("regression_margin"), "regression_margin", minimum=0
+        ),
+        retest_margin=f.number(data.get("retest_margin"), "retest_margin", minimum=0),
+        spot_check_rate=f.fraction(data.get("spot_check_rate"), "spot_check_rate"),
+        calibration=CalibrationThresholds(
+            within_one_point=f.fraction(
+                calibration["within_one_point"], "calibration.within_one_point"
+            ),
+            weighted_kappa=f.fraction(
+                calibration["weighted_kappa"], "calibration.weighted_kappa"
+            ),
+        ),
+    )
 
 
 def _weights(f: _Fields, value: Any) -> dict[str, int | float]:
