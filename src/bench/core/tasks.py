@@ -10,8 +10,10 @@ A Task folder holds:
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import yaml
 
@@ -21,6 +23,13 @@ from bench.core.rubric import Rubric, parse_criteria
 TASK_FILE = "task.md"
 GOLD_FILE = "gold.md"
 RUBRIC_FILE = "rubric.yaml"
+
+# Tracks in catalog order: Task T<n>.* belongs to TRACKS[n - 1].
+TRACKS = ("Framing", "Specs", "Prioritize", "Story")
+TASK_FIELDS = ("id", "track", "trap", "version", "manual_time_minutes")
+
+# T<track>.<n>, optionally suffixed, such as T1.1-example for a synthetic twin.
+_TASK_ID = re.compile(r"^T(?P<track>[1-4])\.[1-9][0-9]*(-[a-z0-9]+)*$")
 
 
 @dataclass(frozen=True)
@@ -64,31 +73,73 @@ def load_tasks(
 def load_task(
     workspace_root: Path, folder: Path, visibility: str, shared: Rubric
 ) -> Task:
-    f = FieldReader(_display(workspace_root, folder / TASK_FILE))
+    display = _display(workspace_root, folder)
+    f = FieldReader(f"{display}/{TASK_FILE}")
     meta, prompt = _frontmatter(f, folder / TASK_FILE)
-    rubric_reader = FieldReader(_display(workspace_root, folder / RUBRIC_FILE))
-    task_criteria = parse_criteria(
-        rubric_reader, rubric_reader.read(workspace_root).get("criteria"), "criteria"
-    )
+    for key in meta:
+        if key not in TASK_FIELDS:
+            raise f.fail(str(key), f"unknown, expected one of {', '.join(TASK_FIELDS)}")
+    task_id = f.text(meta.get("id"), "id")
+    match = _TASK_ID.match(task_id)
+    if not match:
+        raise f.fail("id", f"must look like T<track>.<n>, such as T1.2, got {task_id!r}")
+    track = f.text(meta.get("track"), "track")
+    if track not in TRACKS:
+        raise f.fail("track", f"must be one of {', '.join(TRACKS)}, got {track!r}")
+    if TRACKS.index(track) + 1 != int(match["track"]):
+        raise f.fail("track", f"Task {task_id} belongs to Track {TRACKS[int(match['track']) - 1]}")
+    version = meta.get("version")
+    if isinstance(version, bool) or not isinstance(version, int) or version < 1:
+        raise f.fail("version", f"must be a whole number of at least 1, got {version!r}")
     return Task(
-        id=f.text(meta.get("id"), "id"),
-        track=f.text(meta.get("track"), "track"),
+        id=task_id,
+        track=track,
         trap=f.text(meta.get("trap"), "trap"),
-        version=meta["version"],
-        manual_time_minutes=f.number(meta.get("manual_time_minutes"), "manual_time_minutes"),
+        version=version,
+        manual_time_minutes=f.number(
+            meta.get("manual_time_minutes"), "manual_time_minutes", minimum=0
+        ),
         canonical_prompt=prompt,
-        rubric=Rubric(criteria=shared.criteria + task_criteria),
+        rubric=_task_rubric(workspace_root, f"{display}/{RUBRIC_FILE}", shared),
         visibility=visibility,
         folder=folder,
-        input_path=next(folder.glob("input.*")),
+        input_path=_input_path(f"{display}/input.*", folder),
         gold_answer_path=folder / GOLD_FILE,
     )
 
 
-def _frontmatter(f: FieldReader, path: Path) -> tuple[dict, str]:
-    text = path.read_text()
-    _, header, body = text.split("---\n", 2)
-    return f.mapping(yaml.safe_load(header), "(frontmatter)"), body.strip()
+def _task_rubric(workspace_root: Path, file: str, shared: Rubric) -> Rubric:
+    f = FieldReader(file)
+    criteria = parse_criteria(f, f.read(workspace_root).get("criteria"), "criteria")
+    shared_ids = {c.id for c in shared.criteria}
+    for i, criterion in enumerate(criteria):
+        if criterion.id in shared_ids:
+            raise f.fail(f"criteria[{i}].id", f"{criterion.id!r} is already a shared Criterion")
+    return Rubric(criteria=shared.criteria + criteria)
+
+
+def _input_path(file: str, folder: Path) -> Path:
+    inputs = sorted(folder.glob("input.*"))
+    if len(inputs) != 1:
+        found = ", ".join(p.name for p in inputs) or "none"
+        raise FieldReader(file).fail("(file)", f"need exactly one input file, found {found}")
+    return inputs[0]
+
+
+def _frontmatter(f: FieldReader, path: Path) -> tuple[dict[str, Any], str]:
+    if not path.is_file():
+        raise f.fail("(file)", "is missing")
+    parts = path.read_text().split("---\n", 2)
+    if len(parts) != 3 or parts[0].strip():
+        raise f.fail("(frontmatter)", "must start with a --- fenced YAML block")
+    try:
+        meta = yaml.safe_load(parts[1])
+    except yaml.YAMLError as exc:
+        raise f.fail("(frontmatter)", f"is not valid YAML: {exc}") from exc
+    prompt = parts[2].strip()
+    if not prompt:
+        raise f.fail("(canonical prompt)", "the body after the frontmatter must hold the prompt")
+    return f.mapping(meta, "(frontmatter)"), prompt
 
 
 def _display(workspace_root: Path, path: Path) -> str:

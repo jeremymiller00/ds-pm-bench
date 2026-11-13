@@ -123,3 +123,69 @@ def test_the_same_task_id_in_two_roots_is_rejected(workspace_dir: Path, tmp_path
 
     assert err.value.field == "id"
     assert "T1.1" in err.value.message
+
+
+@pytest.mark.parametrize(
+    "task_args, file, field",
+    [
+        (dict(track="Roadmaps"), "task.md", "track"),
+        (dict(track="Specs"), "task.md", "track"),
+        (dict(version="0"), "task.md", "version"),
+        (dict(version="'2'"), "task.md", "version"),
+        (dict(manual_time="-5"), "task.md", "manual_time_minutes"),
+        (dict(trap="''"), "task.md", "trap"),
+        (dict(prompt=""), "task.md", "(canonical prompt)"),
+        (dict(extra_frontmatter="owner: me\n"), "task.md", "owner"),
+        (dict(input_name="notes.md"), "input.*", "(file)"),
+        (dict(criteria="criteria: []\n"), "rubric.yaml", "criteria"),
+        (
+            dict(
+                criteria="criteria:\n"
+                "  - id: clarity\n    name: Clarity\n    description: Again.\n"
+            ),
+            "rubric.yaml",
+            "criteria[0].id",
+        ),
+    ],
+    ids=[
+        "unknown-track",
+        "track-disagrees-with-id",
+        "version-below-1",
+        "version-not-integer",
+        "negative-manual-time",
+        "blank-trap",
+        "empty-prompt",
+        "unknown-field",
+        "no-input-file",
+        "no-task-criteria",
+        "criterion-shadows-shared",
+    ],
+)
+def test_invalid_task_fails_naming_file_and_field(
+    workspace_dir: Path, task_args: dict, file: str, field: str
+):
+    write_task(workspace_dir, "T1.2", **task_args)
+
+    with pytest.raises(ConfigError) as err:
+        Workspace.open(workspace_dir)
+
+    assert (err.value.file, err.value.field) == (f"tasks/T1.2/{file}", field)
+
+
+def test_task_id_must_follow_the_track_numbering(workspace_dir: Path):
+    write_task(workspace_dir, "Framing-1")
+
+    with pytest.raises(ConfigError) as err:
+        Workspace.open(workspace_dir)
+
+    assert (err.value.file, err.value.field) == ("tasks/Framing-1/task.md", "id")
+
+
+def test_task_without_frontmatter_fails_naming_the_file(workspace_dir: Path):
+    folder = write_task(workspace_dir, "T1.2")
+    (folder / "task.md").write_text("Just a prompt, no frontmatter.\n")
+
+    with pytest.raises(ConfigError) as err:
+        Workspace.open(workspace_dir)
+
+    assert (err.value.file, err.value.field) == ("tasks/T1.2/task.md", "(frontmatter)")
