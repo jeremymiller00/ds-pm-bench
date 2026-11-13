@@ -11,8 +11,16 @@ One of four jobs-to-be-done the suite covers (Framing, Specs, Prioritize, Story)
 _Avoid_: Category, suite section
 
 **Task**:
-One unit of PM work with a sanitized real input, a canonical prompt, a Gold Answer, a Rubric and one Trap. Identified as T<track>.<n>.
+One unit of PM work with a public-safe input (synthetic or sanitized), a canonical prompt, a Gold Answer, a Rubric and one Trap. Identified as T<track>.<n>.
 _Avoid_: Test case, question, scenario
+
+**Public Task**:
+A Task whose input and Gold Answer are safe to publish and live in the public repo.
+_Avoid_: Open task, shared task
+
+**Private Task**:
+A Task holding real sanitized work, stored outside the public repo, whose content is only ever sent to Candidates and Judges with private Clearance.
+_Avoid_: Internal task, secret task
 
 **Trap**:
 The single built-in failure mode a Task is designed to expose, such as inventing a metric the input never states.
@@ -62,8 +70,16 @@ The way a Candidate is driven: automated (API or CLI) or manual-assisted, where 
 ### Running and deciding
 
 **Gate**:
-The pass-or-fail security and data-handling review of a Candidate, which must pass before any input is sent to it. Not scored.
+The pass-or-fail security and data-handling review of a Candidate, which must pass before it can be Run or adopted. Not scored.
 _Avoid_: Security check, approval
+
+**Clearance**:
+The level of data a Candidate or Judge is approved for by its Gate: public only, or public and private.
+_Avoid_: Permission, access level
+
+**Suite**:
+The set of Tasks a Comparison covers: public and private, or public only when a Candidate lacks private Clearance.
+_Avoid_: Benchmark, test set
 
 **Run**:
 One Candidate against all Tasks on one date.
@@ -73,7 +89,7 @@ _Avoid_: Execution, session, benchmark
 What a Candidate returned for a Task, kept as the raw version and the edited final.
 
 **Comparison**:
-A challenger Run paired with a Baseline Run from the same week. The Verdict belongs to a Comparison, never to a single Run.
+A challenger Run paired with a Baseline Run from the same week, over the same Suite. The Verdict belongs to a Comparison, never to a single Run.
 _Avoid_: Evaluation, head-to-head
 
 **Verdict**:
