@@ -7,7 +7,7 @@ A repeatable benchmark that answers one question: should a new AI tool or model 
 ### What is tested
 
 **Track**:
-A job-to-be-done the suite covers, each holding Tasks. The Tracks are defined in config (`tracks` in `config/settings.yaml`; by default Framing, Specs, Prioritize, Story) and each Task declares its own.
+A job-to-be-done the suite covers, holding Tasks. Tracks are configurable; the defaults are Framing, Specs, Prioritize and Story, and each Task declares its own.
 _Avoid_: Category, suite section
 
 **Task**:
