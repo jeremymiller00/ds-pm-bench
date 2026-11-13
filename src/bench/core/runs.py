@@ -23,6 +23,7 @@ from bench.core.tasks import Task
 
 RUNS_FOLDER = "runs"
 RUN_FILE = "run.yaml"
+RESULTS_FOLDER = "results"
 
 PRIVATE_CLEARANCE = "public_and_private"
 
@@ -60,6 +61,85 @@ class Run:
                 check_clearance(self.candidate, task)  # before any content is read
         task = self.task(task_id)
         return f"{task.canonical_prompt}\n\n{task.input_path.read_text().strip()}"
+
+
+    def content_folder(self, task: Task) -> Path:
+        """Where a Task's content-bearing files go: the private root for a Private Task."""
+        if task.visibility == "private":
+            private_root = task.folder.parent.parent  # <private root>/tasks/<id>
+            return private_root / RUNS_FOLDER / self.id
+        return self.folder
+
+    def record_output(
+        self,
+        task_id: str,
+        *,
+        raw: str,
+        final: str,
+        active_seconds: float,
+        latency_seconds: float,
+        cost_usd: float | None,
+    ) -> OutputRecord:
+        """Save a Task's raw Output and edited final with its timings and cost.
+
+        active_seconds is the PM's whole active time on the Task (prompting plus editing);
+        latency_seconds is the time to first draft.
+        """
+        task = self.task(task_id)
+        record = OutputRecord(
+            task_id=task.id,
+            edit_distance=edit_distance(raw, final),
+            active_seconds=active_seconds,
+            latency_seconds=latency_seconds,
+            cost_usd=cost_usd,
+        )
+        content = self.content_folder(task)
+        for name, text in (("raw", raw), ("final", final)):
+            (content / name).mkdir(parents=True, exist_ok=True)
+            (content / name / f"{task.id}.md").write_text(text)
+        numbers = {
+            "task": task.id,
+            "version": task.version,
+            "visibility": task.visibility,
+            "edit_distance": record.edit_distance,
+            "active_seconds": active_seconds,
+            "latency_seconds": latency_seconds,
+            "cost_usd": cost_usd,
+        }
+        (self.folder / RESULTS_FOLDER).mkdir(exist_ok=True)
+        _results_file(self, task.id).write_text(yaml.safe_dump(numbers, sort_keys=False))
+        return record
+
+
+@dataclass(frozen=True)
+class OutputRecord:
+    """The numbers recorded for one Task's Output. Never holds content."""
+
+    task_id: str
+    edit_distance: float
+    active_seconds: float
+    latency_seconds: float
+    cost_usd: float | None
+
+
+def edit_distance(raw: str, final: str) -> float:
+    """Share of words changed: word-level Levenshtein distance over the longer word count."""
+    a, b = raw.split(), final.split()
+    if not a and not b:
+        return 0.0
+    previous = list(range(len(b) + 1))
+    for i, word in enumerate(a, 1):
+        current = [i]
+        for j, other in enumerate(b, 1):
+            current.append(
+                min(previous[j] + 1, current[j - 1] + 1, previous[j - 1] + (word != other))
+            )
+        previous = current
+    return previous[-1] / max(len(a), len(b))
+
+
+def _results_file(run: Run, task_id: str) -> Path:
+    return run.folder / RESULTS_FOLDER / f"{task_id}.yaml"
 
 
 def run_id(candidate: Candidate, date: datetime.date) -> str:

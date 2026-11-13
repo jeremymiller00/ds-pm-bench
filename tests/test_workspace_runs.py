@@ -101,3 +101,79 @@ def test_task_input_is_the_canonical_prompt_then_the_input(ws_dir: Path):
         "Frame this business problem as a data problem.\n\n"
         "Churn rose 4% last quarter in the SMB segment."
     )
+
+
+@pytest.mark.parametrize(
+    "raw, final, expected",
+    [
+        ("the churn rose four percent", "the churn rose four percent", 0.0),
+        ("the churn rose four percent", "the churn fell four percent", 0.2),
+        ("the churn rose", "the churn rose four percent", 0.4),
+        ("one two three four", "", 1.0),
+        ("", "", 0.0),
+        ("a  b\nc", "a b c", 0.0),
+    ],
+    ids=["unchanged", "one-substituted", "two-added", "all-deleted", "both-empty", "whitespace"],
+)
+def test_edit_distance_is_the_share_of_words_changed(ws_dir: Path, raw, final, expected):
+    run = Workspace.open(ws_dir).start_run("claude@opus-5-5", on=DAY)
+
+    record = run.record_output(
+        "T1.1", raw=raw, final=final, active_seconds=600, latency_seconds=12, cost_usd=0.03
+    )
+
+    assert record.edit_distance == pytest.approx(expected)
+
+
+def test_a_public_tasks_output_and_numbers_are_kept_in_the_public_run(ws_dir: Path):
+    run = Workspace.open(ws_dir).start_run("claude@opus-5-5", on=DAY)
+
+    run.record_output(
+        "T1.1",
+        raw="Raw draft words",
+        final="Edited draft words",
+        active_seconds=600,
+        latency_seconds=12,
+        cost_usd=0.03,
+    )
+
+    folder = ws_dir / "runs" / run.id
+    assert (folder / "raw" / "T1.1.md").read_text() == "Raw draft words"
+    assert (folder / "final" / "T1.1.md").read_text() == "Edited draft words"
+    numbers = yaml.safe_load((folder / "results" / "T1.1.yaml").read_text())
+    assert numbers == {
+        "task": "T1.1",
+        "version": 2,
+        "visibility": "public",
+        "edit_distance": pytest.approx(1 / 3),
+        "active_seconds": 600,
+        "latency_seconds": 12,
+        "cost_usd": 0.03,
+    }
+
+
+def test_a_private_tasks_content_goes_only_to_the_private_root(
+    ws_dir: Path, private_root: Path
+):
+    run = Workspace.open(ws_dir).start_run("cleared@1", on=DAY)
+
+    run.record_output(
+        "T3.1",
+        raw="Acme roadmap raw secret",
+        final="Acme roadmap final secret",
+        active_seconds=900,
+        latency_seconds=40,
+        cost_usd=None,
+    )
+
+    private_run = private_root / "runs" / run.id
+    assert (private_run / "raw" / "T3.1.md").read_text() == "Acme roadmap raw secret"
+    assert (private_run / "final" / "T3.1.md").read_text() == "Acme roadmap final secret"
+    numbers = yaml.safe_load((ws_dir / "runs" / run.id / "results" / "T3.1.yaml").read_text())
+    assert numbers["visibility"] == "private"
+    assert numbers["edit_distance"] == pytest.approx(0.25)
+    public_text = "".join(
+        p.read_text() for p in ws_dir.rglob("*") if p.is_file() and "config" not in p.parts
+    )
+    assert "Acme" not in public_text
+    assert "secret" not in public_text
