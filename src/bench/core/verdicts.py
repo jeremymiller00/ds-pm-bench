@@ -57,10 +57,6 @@ class Comparison:
     baseline_score: RunScore
     verdict: Verdict
 
-    @property
-    def warnings(self) -> tuple[str, ...]:
-        return self.verdict.warnings
-
 
 def compare(
     settings: Settings,

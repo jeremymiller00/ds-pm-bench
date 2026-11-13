@@ -172,7 +172,7 @@ def test_runs_more_than_a_week_apart_are_compared_with_a_warning(ws_dir: Path):
 
     comparison = ws.compare(challenger_run, baseline_run)
 
-    assert comparison.warnings == ("the Runs are 8 days apart, more than a week",)
+    assert comparison.verdict.warnings == ("the Runs are 8 days apart, more than a week",)
     assert comparison.verdict.outcome == "adopt"
 
 
@@ -181,7 +181,7 @@ def test_runs_a_week_apart_get_no_warning(ws_dir: Path):
     baseline_run = complete_run(ws, BASELINE)
     challenger_run = complete_run(ws, CHALLENGER, on=DAY - datetime.timedelta(days=7))
 
-    assert ws.compare(challenger_run, baseline_run).warnings == ()
+    assert ws.compare(challenger_run, baseline_run).verdict.warnings == ()
 
 
 def test_the_baseline_run_must_be_a_run_of_the_baseline(ws_dir: Path):
