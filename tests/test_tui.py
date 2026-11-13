@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-from textual.widgets import Tree
+from textual.widgets import Static, Tree
 
 from bench import Workspace
 from bench.tui.app import BenchApp
@@ -86,3 +86,26 @@ async def test_task_labels_mark_visibility_version_and_placeholders(
 
     assert public == "T1.1  public  v3  ready"
     assert private_task == "T1.2  private  v1  placeholder: Gold Answer, Manual Time"
+
+
+async def test_highlighting_a_task_shows_its_details_read_only(workspace_dir: Path):
+    write_task(workspace_dir, "T1.1", input_text="TODO")
+
+    app = BenchApp(Workspace.open(workspace_dir))
+    async with app.run_test() as pilot:
+        details = app.query_one("#task-details", Static)
+        assert "Select a Task" in str(details.content)
+        await pilot.press("down")  # from the Framing Track to its first Task
+        await pilot.pause()
+        text = str(details.content)
+
+    assert "T1.1" in text
+    assert "Track: Framing" in text
+    assert "Visibility: public" in text
+    assert "Version: 1" in text
+    assert "Manual Time: 45 minutes" in text
+    assert "Placeholders: input" in text
+    assert "Invents a success metric the input never states." in text
+    assert "Frame this business problem as a data problem." in text
+    assert "names_the_decision" in text
+    assert not app.query("Input, TextArea")  # nothing to edit here
