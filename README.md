@@ -22,6 +22,11 @@ workspace needs `config/`, Tasks under `tasks/` or `examples/`, and Candidates u
 `candidates/` with exactly one marked `baseline: true`. Each Task's `track` must be
 one of the `tracks` listed in `config/settings.yaml`.
 
+Private Tasks (ADR 0006) are read from private roots listed in `config/local.yaml`,
+which is git-ignored because the paths are machine-specific. Copy
+`config/local.example.yaml` to start; without it no Private Tasks load.
+`private_roots` in the public `config/settings.yaml` is refused.
+
 ### 1. Record a Run from results files
 
 A results folder holds one `<task id>.yaml` per Task in the Suite (an unknown key

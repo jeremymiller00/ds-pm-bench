@@ -35,7 +35,7 @@ ds-pm-bench/
   src/bench/    core/  adapters/  cli.py  tui/
   tests/
 
-ds-pm-bench-private/   (separate private repo, path in config)
+ds-pm-bench-private/   (separate private repo, path in git-ignored config/local.yaml)
   tasks/        T1.1/ ... T4.3/   (catalog Tasks, private by default)
   runs/         <date>-<candidate>/ raw/ final/ judge-reasons.json
   calibration/  private calibration items

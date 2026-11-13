@@ -74,10 +74,7 @@ def test_public_task_loads_from_the_repo_tasks_folder(workspace_dir: Path):
 
 
 def configure_private_root(workspace_dir: Path, private: Path) -> None:
-    settings = workspace_dir / "config" / "settings.yaml"
-    settings.write_text(
-        settings.read_text().replace("private_roots: []", f"private_roots: ['{private}']")
-    )
+    (workspace_dir / "config" / "local.yaml").write_text(f"private_roots: ['{private}']\n")
 
 
 def test_tasks_from_a_private_root_are_private_and_public_ones_public(

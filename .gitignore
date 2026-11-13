@@ -3,6 +3,9 @@
 .env.*
 !.env.example
 
+# Machine-specific config (ADR-0006): private root paths, often home paths
+config/local.yaml
+
 # Python and tool caches
 __pycache__/
 *.py[cod]

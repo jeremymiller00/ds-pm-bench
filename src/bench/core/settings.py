@@ -1,4 +1,8 @@
-"""Benchmark settings: config/settings.yaml (Tracks, weights, margins, bands, roots)."""
+"""Benchmark settings: config/settings.yaml, plus the machine-specific config/local.yaml.
+
+settings.yaml is public: Tracks, weights, margins, bands. local.yaml is git-ignored and
+optional: the private root paths (ADR-0006), which are home paths not worth publishing.
+"""
 
 from __future__ import annotations
 
@@ -9,6 +13,8 @@ from typing import Any
 from bench.core.fields import FieldReader
 
 SETTINGS_FILE = "config/settings.yaml"
+LOCAL_FILE = "config/local.yaml"
+LOCAL_FIELDS = ("private_roots",)
 
 DIMENSIONS = ("quality", "edit_distance", "time_saved", "cost_latency")
 
@@ -45,6 +51,11 @@ class Settings:
 def load_settings(root: Path) -> Settings:
     f = FieldReader(SETTINGS_FILE)
     data = f.read(root)
+    if "private_roots" in data:
+        raise f.fail(
+            "private_roots",
+            f"belongs in the git-ignored {LOCAL_FILE}, not the public settings",
+        )
     calibration = f.mapping(data.get("calibration"), "calibration")
     f.exact_keys(calibration, "calibration", ("within_one_point", "weighted_kappa"))
     return Settings(
@@ -64,8 +75,25 @@ def load_settings(root: Path) -> Settings:
             ),
         ),
         normalization=_normalization(f, data.get("normalization")),
-        private_roots=_private_roots(f, root, data.get("private_roots", [])),
+        private_roots=_load_private_roots(root),
     )
+
+
+def _load_private_roots(root: Path) -> tuple[Path, ...]:
+    """The private roots in config/local.yaml; none when the file is absent."""
+    if not (root / LOCAL_FILE).is_file():
+        return ()
+    f = FieldReader(LOCAL_FILE)
+    text = (root / LOCAL_FILE).read_text()
+    if not text.strip() or all(
+        not line.strip() or line.lstrip().startswith("#") for line in text.splitlines()
+    ):
+        return ()  # comments only, such as a fresh copy of the example
+    data = f.read(root)
+    for key in data:
+        if key not in LOCAL_FIELDS:
+            raise f.fail(str(key), f"unknown, expected one of {', '.join(LOCAL_FIELDS)}")
+    return _private_roots(f, root, data.get("private_roots", []))
 
 
 def _tracks(f: FieldReader, value: Any) -> tuple[str, ...]:
