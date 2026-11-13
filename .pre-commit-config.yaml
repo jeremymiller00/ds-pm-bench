@@ -1,0 +1,7 @@
+# Secret scan before every commit (ADR-0005).
+# Install once with: uvx pre-commit install
+repos:
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.21.2
+    hooks:
+      - id: gitleaks
