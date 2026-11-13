@@ -86,8 +86,18 @@ class Workspace:
         """Score a Run's per-Task result records with this Workspace's weights and bands."""
         return score_run(self.settings, results)
 
-    def compare(self, challenger_run_id: str, baseline_run_id: str) -> Comparison:
-        """Compare a challenger Run with a Baseline Run and reach a Verdict."""
+    def compare(
+        self,
+        challenger_run_id: str,
+        baseline_run_id: str,
+        *,
+        spot_check_disagreement: float | None = None,
+    ) -> Comparison:
+        """Compare a challenger Run with a Baseline Run and reach a Verdict.
+
+        spot_check_disagreement is the largest Judge-versus-human gap, in points,
+        recorded on a Spot-check of these Runs; None when none was recorded.
+        """
         challenger = self.resume_run(challenger_run_id)
         baseline = self.resume_run(baseline_run_id)
         return compare(
@@ -96,4 +106,5 @@ class Workspace:
             self.score(challenger.task_results()),
             baseline,
             self.score(baseline.task_results()),
+            spot_check_disagreement,
         )

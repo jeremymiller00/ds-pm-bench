@@ -8,6 +8,9 @@ from bench.core.runs import Run
 from bench.core.scoring import RunScore
 from bench.core.settings import Settings
 
+# A Judge and human scoring more than this many points apart on a Spot-check (PLAN.md).
+SPOT_CHECK_DISAGREEMENT_POINTS = 1
+
 
 @dataclass(frozen=True)
 class Verdict:
@@ -31,8 +34,9 @@ def compare(
     challenger_score: RunScore,
     baseline: Run,
     baseline_score: RunScore,
+    spot_check_disagreement: float | None = None,
 ) -> Comparison:
-    verdict = decide(settings, challenger_score, baseline_score)
+    verdict = decide(settings, challenger_score, baseline_score, spot_check_disagreement)
     return Comparison(
         challenger=challenger,
         baseline=baseline,
@@ -42,8 +46,17 @@ def compare(
     )
 
 
-def decide(settings: Settings, challenger: RunScore, baseline: RunScore) -> Verdict:
-    """The adopt rule, given a challenger with a passing Gate (it has a Run)."""
+def decide(
+    settings: Settings,
+    challenger: RunScore,
+    baseline: RunScore,
+    spot_check_disagreement: float | None = None,
+) -> Verdict:
+    """The adopt rule, given a challenger with a passing Gate (it has a Run).
+
+    A recorded Spot-check disagreement over the limit makes the Judge's scores
+    suspect, so it forces a re-test before the scores are weighed at all.
+    """
     gap = round(challenger.weighted - baseline.weighted, 9)  # margins compare exactly
     regressions = tuple(
         track
@@ -52,6 +65,19 @@ def decide(settings: Settings, challenger: RunScore, baseline: RunScore) -> Verd
         > settings.regression_margin
     )
     scores = f"weighted {challenger.weighted:.2f} vs Baseline {baseline.weighted:.2f}"
+    if (
+        spot_check_disagreement is not None
+        and spot_check_disagreement > SPOT_CHECK_DISAGREEMENT_POINTS
+    ):
+        return Verdict(
+            "re-test",
+            (
+                f"Spot-check: Judge and human differ by {spot_check_disagreement:g} points, "
+                f"more than {SPOT_CHECK_DISAGREEMENT_POINTS}",
+                scores,
+            ),
+            regressions,
+        )
     if regressions:
         drops = ", ".join(
             f"{t} {challenger.track_quality[t]:.2f} vs {baseline.track_quality[t]:.2f}"

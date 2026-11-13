@@ -47,11 +47,13 @@ def complete_run(
     return run.id
 
 
-def compare(ws_dir: Path, **challenger) -> object:
+def compare(ws_dir: Path, *, spot_check_disagreement: float | None = None, **challenger):
     ws = Workspace.open(ws_dir)
     baseline_run = complete_run(ws, BASELINE)
     challenger_run = complete_run(ws, CHALLENGER, **challenger)
-    return ws.compare(challenger_run, baseline_run)
+    return ws.compare(
+        challenger_run, baseline_run, spot_check_disagreement=spot_check_disagreement
+    )
 
 
 def test_a_challenger_matching_the_baseline_is_adopted(ws_dir: Path):
@@ -96,3 +98,14 @@ def test_a_track_drop_within_the_regression_margin_is_not_a_regression(ws_dir: P
 
     assert comparison.verdict.outcome == "adopt"
     assert comparison.verdict.regressions == ()
+
+
+def test_a_spot_check_disagreement_over_one_point_forces_a_retest(ws_dir: Path):
+    comparison = compare(ws_dir, spot_check_disagreement=1.5)
+
+    assert comparison.verdict.outcome == "re-test"
+    assert any("Spot-check" in r for r in comparison.verdict.rationale)
+
+
+def test_a_spot_check_disagreement_of_one_point_is_tolerated(ws_dir: Path):
+    assert compare(ws_dir, spot_check_disagreement=1).verdict.outcome == "adopt"
