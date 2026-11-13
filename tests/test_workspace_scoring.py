@@ -193,3 +193,28 @@ def test_run_with_costs_reports_no_re_normalization(workspace_dir: Path):
 
     assert score.latency_only_tasks == ()
     assert score.notes == ()
+
+
+@pytest.mark.parametrize(
+    "overrides, field",
+    [
+        ({"criterion_scores": {}}, "criterion_scores"),
+        ({"criterion_scores": {"correctness": 6}}, "criterion_scores.correctness"),
+        ({"criterion_scores": {"correctness": 0}}, "criterion_scores.correctness"),
+        ({"edit_distance": 1.2}, "edit_distance"),
+        ({"manual_minutes": 0}, "manual_minutes"),
+        ({"active_seconds": -1}, "active_seconds"),
+        ({"cost_usd": -0.01}, "cost_usd"),
+        ({"latency_seconds": -1}, "latency_seconds"),
+    ],
+)
+def test_invalid_result_record_is_rejected_naming_task_and_field(overrides, field):
+    with pytest.raises(ValueError) as err:
+        result(task_id="T3.2", **overrides)
+
+    assert "T3.2" in str(err.value) and field in str(err.value)
+
+
+def test_scoring_no_results_is_an_error(workspace_dir: Path):
+    with pytest.raises(ValueError, match="no Task results"):
+        Workspace.open(workspace_dir).score([])

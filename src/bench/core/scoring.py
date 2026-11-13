@@ -76,6 +76,8 @@ def score_task(settings: Settings, result: TaskResult) -> TaskScore:
 
 def score_run(settings: Settings, results: Iterable[TaskResult]) -> RunScore:
     tasks = tuple(score_task(settings, r) for r in results)
+    if not tasks:
+        raise ValueError("cannot score a Run with no Task results")
     tracks = dict.fromkeys(t.track for t in tasks)
     dimensions = {d: mean(t.dimensions[d] for t in tasks) for d in DIMENSIONS}
     latency_only = tuple(t.task_id for t in tasks if t.latency_only)

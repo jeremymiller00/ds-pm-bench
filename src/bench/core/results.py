@@ -28,3 +28,22 @@ class TaskResult:
     manual_minutes: float
     cost_usd: float | None
     latency_seconds: float
+
+    def __post_init__(self) -> None:
+        if not self.criterion_scores:
+            self._fail("criterion_scores", "must hold at least one Criterion score")
+        for cid, value in self.criterion_scores.items():
+            if not 1 <= value <= 5:
+                self._fail(f"criterion_scores.{cid}", f"must be 1-5, got {value}")
+        if not 0 <= self.edit_distance <= 1:
+            self._fail("edit_distance", f"must be between 0 and 1, got {self.edit_distance}")
+        if self.manual_minutes <= 0:
+            self._fail("manual_minutes", f"must be positive, got {self.manual_minutes}")
+        for field in ("active_seconds", "latency_seconds"):
+            if getattr(self, field) < 0:
+                self._fail(field, f"must not be negative, got {getattr(self, field)}")
+        if self.cost_usd is not None and self.cost_usd < 0:
+            self._fail("cost_usd", f"must not be negative, got {self.cost_usd}")
+
+    def _fail(self, field: str, message: str) -> None:
+        raise ValueError(f"Task {self.task_id}: {field}: {message}")
