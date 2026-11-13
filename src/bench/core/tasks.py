@@ -97,7 +97,9 @@ def load_task(
         raise f.fail("version", f"must be a whole number of at least 1, got {version!r}")
     manual_time = meta.get("manual_time_minutes")
     if manual_time is not None:
-        manual_time = f.number(manual_time, "manual_time_minutes", minimum=0)
+        manual_time = f.number(manual_time, "manual_time_minutes")
+        if manual_time <= 0:
+            raise f.fail("manual_time_minutes", f"must be positive, got {manual_time}")
     input_path = _input_path(f"{display}/input.*", folder)
     gold_path = folder / GOLD_FILE
     if not gold_path.is_file():
