@@ -11,6 +11,7 @@ from pathlib import Path
 import pytest
 import yaml
 
+from bench import Workspace
 from bench.cli import main
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -86,3 +87,49 @@ def test_bench_run_refuses_a_candidate_whose_gate_failed(tmp_path: Path, capsys)
 
     assert "GateNotPassed" in capsys.readouterr().err
     assert not (ws / "runs").exists()
+
+
+def test_bench_score_prints_a_runs_weighted_and_dimension_scores(tmp_path: Path, capsys):
+    ws = golden_workspace("adopt-public-only", tmp_path)
+    run_id = record_run(ws, "adopt-public-only", BASELINE)
+    capsys.readouterr()
+
+    assert bench(ws, "score", run_id) == 0
+
+    # Hand-computed in the Baseline's result file: Quality 4, Edit Distance 3,
+    # Time saved 4, Cost/latency 4 -> weighted 3.8.
+    out = capsys.readouterr().out
+    assert out.splitlines()[0] == f"Run {run_id}: weighted 3.80"
+    assert "Track Framing quality: 4.00" in out
+
+
+def test_bench_verdict_log_appends_the_verdict_to_the_decision_log(tmp_path: Path, capsys):
+    ws = golden_workspace("adopt-public-only", tmp_path)
+    baseline_run = record_run(ws, "adopt-public-only", BASELINE)
+    challenger_run = record_run(ws, "adopt-public-only", "other@1")
+
+    args = ("verdict", challenger_run, baseline_run, "--log", "--on", DAY)
+    assert bench(ws, *args, "--judge-setup-hash", "abc123") == 0
+
+    assert f"logged: decisions/0001-{DAY}-other@1.yaml" in capsys.readouterr().out
+    (entry,) = Workspace.open(ws).decision_log()
+    assert entry["verdict"] == "adopt"
+    assert entry["judge_setup_hash"] == "abc123"
+
+
+def test_bench_run_leaves_tasks_without_scores_pending_and_resume_completes_them(
+    tmp_path: Path, capsys
+):
+    ws = golden_workspace("adopt-public-only", tmp_path)
+    empty = tmp_path / "no-results"
+    empty.mkdir()
+    full = GOLDEN / "adopt-public-only" / "results" / BASELINE
+
+    assert bench(ws, "run", BASELINE, "--results", str(empty), "--on", DAY) == 0
+    assert "pending: T1.1-example" in capsys.readouterr().out
+    assert bench(ws, "score", BASELINE_RUN) == 1
+    assert "RunIncomplete" in capsys.readouterr().err
+
+    assert bench(ws, "run", "--resume", BASELINE_RUN, "--results", str(full)) == 0
+    assert "pending" not in capsys.readouterr().out
+    assert bench(ws, "score", BASELINE_RUN) == 0
