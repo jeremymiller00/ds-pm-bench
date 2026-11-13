@@ -130,3 +130,50 @@ def test_malformed_yaml_fails_naming_the_file(workspace_dir: Path):
         Workspace.open(workspace_dir)
 
     assert err.value.file == "config/settings.yaml"
+
+
+def test_default_config_has_normalization_bands_for_each_measure(workspace_dir: Path):
+    bands = Workspace.open(workspace_dir).settings.normalization
+
+    assert set(bands) == {"edit_distance", "time_saved", "cost", "latency"}
+    assert bands["edit_distance"].better == "lower"
+    assert bands["time_saved"].better == "higher"
+    for band in bands.values():
+        assert len(band.thresholds) == 4
+        assert list(band.thresholds) == sorted(band.thresholds)
+
+
+@pytest.mark.parametrize(
+    "value, field",
+    [
+        ("{better: lower, thresholds: [0.05, 0.3, 0.15, 0.5]}", "normalization.edit_distance.thresholds"),
+        ("{better: lower, thresholds: [0.05, 0.15, 0.3]}", "normalization.edit_distance.thresholds"),
+        ("{better: lower, thresholds: [0.05, 0.15, x, 0.5]}", "normalization.edit_distance.thresholds[2]"),
+        ("{better: sideways, thresholds: [0.05, 0.15, 0.3, 0.5]}", "normalization.edit_distance.better"),
+    ],
+    ids=["not-ascending", "wrong-count", "non-numeric", "bad-direction"],
+)
+def test_invalid_normalization_band_fails_naming_the_field(
+    workspace_dir: Path, value: str, field: str
+):
+    path = workspace_dir / "config" / "settings.yaml"
+    data = yaml.safe_load(path.read_text())
+    data["normalization"]["edit_distance"] = yaml.safe_load(value)
+    path.write_text(yaml.safe_dump(data))
+
+    with pytest.raises(ConfigError) as err:
+        Workspace.open(workspace_dir)
+
+    assert (err.value.file, err.value.field) == ("config/settings.yaml", field)
+
+
+def test_missing_normalization_band_fails_naming_the_measure(workspace_dir: Path):
+    path = workspace_dir / "config" / "settings.yaml"
+    data = yaml.safe_load(path.read_text())
+    del data["normalization"]["latency"]
+    path.write_text(yaml.safe_dump(data))
+
+    with pytest.raises(ConfigError) as err:
+        Workspace.open(workspace_dir)
+
+    assert err.value.field == "normalization.latency"

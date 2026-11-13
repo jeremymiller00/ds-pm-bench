@@ -14,6 +14,17 @@ SETTINGS_FILE = "config/settings.yaml"
 
 DIMENSIONS = ("quality", "edit_distance", "time_saved", "cost_latency")
 
+# Raw measures that are normalized to 1-5 through a band.
+BANDED_MEASURES = ("edit_distance", "time_saved", "cost", "latency")
+
+
+@dataclass(frozen=True)
+class Band:
+    """Four ascending thresholds splitting a raw measure into five 1-5 scores."""
+
+    better: str  # "lower" or "higher"
+    thresholds: tuple[float, float, float, float]
+
 
 @dataclass(frozen=True)
 class CalibrationThresholds:
@@ -28,6 +39,7 @@ class Settings:
     retest_margin: float
     spot_check_rate: float
     calibration: CalibrationThresholds
+    normalization: dict[str, Band]
 
 
 class _Fields:
@@ -97,7 +109,29 @@ def load_settings(root: Path) -> Settings:
                 calibration["weighted_kappa"], "calibration.weighted_kappa"
             ),
         ),
+        normalization=_normalization(f, data.get("normalization")),
     )
+
+
+def _normalization(f: _Fields, value: Any) -> dict[str, Band]:
+    raw = f.mapping(value, "normalization")
+    f.exact_keys(raw, "normalization", BANDED_MEASURES)
+    return {m: _band(f, raw[m], f"normalization.{m}") for m in BANDED_MEASURES}
+
+
+def _band(f: _Fields, value: Any, field: str) -> Band:
+    raw = f.mapping(value, field)
+    f.exact_keys(raw, field, ("better", "thresholds"))
+    better = raw["better"]
+    if better not in ("lower", "higher"):
+        raise f.fail(f"{field}.better", f"must be 'lower' or 'higher', got {better!r}")
+    thresholds = raw["thresholds"]
+    if not isinstance(thresholds, list) or len(thresholds) != 4:
+        raise f.fail(f"{field}.thresholds", "must be a list of 4 numbers")
+    numbers = [f.number(t, f"{field}.thresholds[{i}]") for i, t in enumerate(thresholds)]
+    if any(a >= b for a, b in zip(numbers, numbers[1:])):
+        raise f.fail(f"{field}.thresholds", f"must be strictly ascending, got {numbers}")
+    return Band(better=better, thresholds=tuple(numbers))
 
 
 def _weights(f: _Fields, value: Any) -> dict[str, int | float]:

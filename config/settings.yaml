@@ -20,3 +20,23 @@ spot_check_rate: 0.25
 calibration:
   within_one_point: 0.9   # share of scores within 1 point of the human score
   weighted_kappa: 0.6     # minimum weighted kappa per Criterion
+
+# Normalization bands: how a raw measure maps to a 1-5 Dimension score.
+# Four ascending thresholds split the range into five bands.
+#   better: lower  -> value <= thresholds[0] scores 5, > thresholds[3] scores 1
+#   better: higher -> value >= thresholds[3] scores 5, < thresholds[0] scores 1
+# Quality needs no band: it is already the 1-5 average of a Task's Criteria.
+# Cost/latency combines cost and latency; a null cost makes it latency only.
+normalization:
+  edit_distance:          # share of words changed between raw Output and final
+    better: lower
+    thresholds: [0.05, 0.15, 0.30, 0.50]
+  time_saved:             # share of Manual Time saved
+    better: higher
+    thresholds: [0.20, 0.40, 0.60, 0.80]
+  cost:                   # USD per Task
+    better: lower
+    thresholds: [0.01, 0.05, 0.20, 1.00]
+  latency:                # seconds to first draft
+    better: lower
+    thresholds: [10, 30, 60, 120]
