@@ -177,3 +177,39 @@ def test_missing_normalization_band_fails_naming_the_measure(workspace_dir: Path
         Workspace.open(workspace_dir)
 
     assert err.value.field == "normalization.latency"
+
+
+def test_default_config_has_no_private_roots(workspace_dir: Path):
+    assert Workspace.open(workspace_dir).settings.private_roots == ()
+
+
+def test_private_roots_resolve_relative_to_the_workspace(workspace_dir: Path, tmp_path: Path):
+    private = tmp_path / "bench-private"
+    private.mkdir()
+    absolute = tmp_path / "elsewhere"
+    absolute.mkdir()
+    set_setting(workspace_dir, "private_roots", f"['../bench-private', '{absolute}']")
+
+    ws = Workspace.open(workspace_dir)
+
+    assert ws.settings.private_roots == (private.resolve(), absolute.resolve())
+
+
+@pytest.mark.parametrize(
+    "value, field",
+    [
+        ("'../bench-private'", "private_roots"),
+        ("['../does-not-exist']", "private_roots[0]"),
+        ("[42]", "private_roots[0]"),
+    ],
+    ids=["not-a-list", "missing-directory", "not-a-path"],
+)
+def test_invalid_private_roots_fail_naming_the_field(
+    workspace_dir: Path, value: str, field: str
+):
+    set_setting(workspace_dir, "private_roots", value)
+
+    with pytest.raises(ConfigError) as err:
+        Workspace.open(workspace_dir)
+
+    assert (err.value.file, err.value.field) == ("config/settings.yaml", field)

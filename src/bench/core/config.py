@@ -40,6 +40,7 @@ class Settings:
     spot_check_rate: float
     calibration: CalibrationThresholds
     normalization: dict[str, Band]
+    private_roots: tuple[Path, ...]
 
 
 class _Fields:
@@ -110,7 +111,23 @@ def load_settings(root: Path) -> Settings:
             ),
         ),
         normalization=_normalization(f, data.get("normalization")),
+        private_roots=_private_roots(f, root, data.get("private_roots", [])),
     )
+
+
+def _private_roots(f: _Fields, root: Path, value: Any) -> tuple[Path, ...]:
+    if not isinstance(value, list):
+        raise f.fail("private_roots", "must be a list of directory paths")
+    roots = []
+    for i, entry in enumerate(value):
+        field = f"private_roots[{i}]"
+        if not isinstance(entry, str) or not entry.strip():
+            raise f.fail(field, f"must be a directory path, got {entry!r}")
+        path = (root / Path(entry).expanduser()).resolve()
+        if not path.is_dir():
+            raise f.fail(field, f"directory {path} does not exist")
+        roots.append(path)
+    return tuple(roots)
 
 
 def _normalization(f: _Fields, value: Any) -> dict[str, Band]:

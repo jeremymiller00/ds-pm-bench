@@ -40,3 +40,8 @@ normalization:
   latency:                # seconds to first draft
     better: lower
     thresholds: [10, 30, 60, 120]
+
+# Private Task roots (ADR-0006): separate private git repos holding Private Tasks
+# and every content-bearing artifact for them. Relative paths resolve against
+# this repo's root, "~" expands. Empty means Private Tasks cannot be Run.
+private_roots: []
