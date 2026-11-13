@@ -432,6 +432,15 @@ def _candidate_snapshot(c: Candidate) -> dict[str, Any]:
     }
 
 
+def task_versions_used(workspace_root: Path) -> set[tuple[str, int]]:
+    """Every (Task id, version) some Run's snapshot holds; frozen per ADR-0003."""
+    used: set[tuple[str, int]] = set()
+    for path in (workspace_root / RUNS_FOLDER).glob(f"*/{RUN_FILE}"):
+        snapshot = yaml.safe_load(path.read_text()) or {}
+        used.update((task_id, v) for task_id, v in (snapshot.get("tasks") or {}).items())
+    return used
+
+
 def open_run(
     workspace_root: Path,
     run_id: str,

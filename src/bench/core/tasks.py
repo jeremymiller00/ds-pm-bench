@@ -11,15 +11,18 @@ A Task folder holds:
 from __future__ import annotations
 
 import re
+import shutil
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import yaml
 
+from bench.core.errors import TaskEditRefused
 from bench.core.fields import FieldReader
 from bench.core.kinds import Visibility
-from bench.core.rubric import Rubric, parse_criteria
+from bench.core.rubric import Criterion, Rubric, parse_criteria
 from bench.core.settings import SETTINGS_FILE
 
 TASK_FILE = "task.md"
@@ -137,6 +140,159 @@ def load_task(
         input_path=input_path,
         gold_answer_path=gold_path,
         placeholders=placeholders,
+    )
+
+
+# The scaffold's marker for content the PM has yet to write (see _is_placeholder).
+PLACEHOLDER = "TODO\n"
+INPUT_FILE = "input.md"  # the scaffold's input; an existing Task's input may be input.*
+
+type CriterionSpec = Criterion | Mapping[str, Any]
+
+
+def scaffold_task(
+    workspace_root: Path,
+    root: Path,
+    visibility: Visibility,
+    task_id: str,
+    *,
+    track: str,
+    trap: str,
+    canonical_prompt: str,
+    criteria: Iterable[CriterionSpec],
+    manual_time_minutes: int | float | None,
+    shared: Rubric,
+    tracks: tuple[str, ...],
+) -> Task:
+    """Write a new Task folder at version 1 with a placeholder input and Gold Answer.
+
+    Validated by loading it back; on a ConfigError nothing is left behind.
+    """
+    public = visibility == Visibility.PUBLIC
+    folder = root / (PUBLIC_TASK_FOLDERS[0] if public else PRIVATE_TASK_FOLDER) / task_id
+    f = FieldReader(f"{_display(workspace_root, folder)}/{TASK_FILE}")
+    if not isinstance(task_id, str) or not _TASK_ID.match(task_id):
+        raise f.fail("id", f"must look like T<track>.<n>, such as T1.2, got {task_id!r}")
+    if folder.exists():
+        raise f.fail("id", f"{folder} already exists")
+    folder.mkdir(parents=True)
+    meta = {
+        "id": task_id,
+        "track": track,
+        "trap": trap,
+        "version": 1,
+        "manual_time_minutes": manual_time_minutes,
+    }
+    try:
+        _write_task_md(folder, meta, canonical_prompt)
+        _write_criteria(folder, criteria)
+        (folder / INPUT_FILE).write_text(PLACEHOLDER)
+        (folder / GOLD_FILE).write_text(PLACEHOLDER)
+        return load_task(workspace_root, root, folder, visibility, shared, tracks)
+    except BaseException:
+        shutil.rmtree(folder)
+        raise
+
+
+# What Workspace.update_task may change; version follows ADR-0003, the rest is fixed.
+EDITABLE_FIELDS = (
+    "track",
+    "trap",
+    "canonical_prompt",
+    "criteria",
+    "manual_time_minutes",
+    "input",
+    "gold_answer",
+)
+
+
+def edit_task(
+    workspace_root: Path,
+    task: Task,
+    changes: Mapping[str, Any],
+    *,
+    used: bool,
+    shared: Rubric,
+    tracks: tuple[str, ...],
+) -> Task:
+    """Rewrite a Task's files with the changes; a new version when a Run used this one.
+
+    An edit that changes nothing leaves the Task as it is. On a ConfigError the
+    Task's files are restored.
+    """
+    for key in changes:
+        if key == "visibility":
+            raise TaskEditRefused(
+                f"Task {task.id}: visibility comes from the root the Task lives in "
+                "and cannot be changed by an edit"
+            )
+        if key not in EDITABLE_FIELDS:
+            raise TaskEditRefused(
+                f"Task {task.id}: {key!r} cannot be edited; "
+                f"editable fields are {', '.join(EDITABLE_FIELDS)}"
+            )
+    current = _editable_state(task, shared)
+    edited = {**current, **changes}
+    if "criteria" in changes:
+        edited["criteria"] = [_criterion_dict(c) for c in changes["criteria"]]
+    if edited == current:
+        return task
+    files = [task.folder / TASK_FILE, task.folder / RUBRIC_FILE, task.input_path,
+             task.gold_answer_path]
+    backup = {path: path.read_bytes() for path in files}
+    meta = {
+        "id": task.id,
+        "track": edited["track"],
+        "trap": edited["trap"],
+        "version": task.version + 1 if used else task.version,
+        "manual_time_minutes": edited["manual_time_minutes"],
+    }
+    try:
+        _write_task_md(task.folder, meta, edited["canonical_prompt"])
+        _write_criteria(task.folder, edited["criteria"])
+        task.input_path.write_text(edited["input"])
+        task.gold_answer_path.write_text(edited["gold_answer"])
+        return load_task(
+            workspace_root, task.root, task.folder, task.visibility, shared, tracks
+        )
+    except BaseException:
+        for path, content in backup.items():
+            path.write_bytes(content)
+        raise
+
+
+def _editable_state(task: Task, shared: Rubric) -> dict[str, Any]:
+    return {
+        "track": task.track,
+        "trap": task.trap,
+        "canonical_prompt": task.canonical_prompt,
+        "criteria": [
+            _criterion_dict(c) for c in task.rubric.criteria[len(shared.criteria):]
+        ],
+        "manual_time_minutes": task.manual_time_minutes,
+        "input": task.input_path.read_text(),
+        "gold_answer": task.gold_answer_path.read_text(),
+    }
+
+
+def _criterion_dict(criterion: CriterionSpec) -> dict[str, Any]:
+    if isinstance(criterion, Criterion):
+        return {"id": criterion.id, "name": criterion.name,
+                "description": criterion.description}
+    return dict(criterion)
+
+
+def _write_task_md(folder: Path, meta: dict[str, Any], prompt: Any) -> None:
+    frontmatter = yaml.safe_dump(meta, sort_keys=False, allow_unicode=True)
+    body = prompt.strip() if isinstance(prompt, str) else ""
+    (folder / TASK_FILE).write_text(f"---\n{frontmatter}---\n{body}\n")
+
+
+def _write_criteria(folder: Path, criteria: Iterable[CriterionSpec]) -> None:
+    data = {"criteria": [_criterion_dict(c) for c in criteria]}
+    (folder / RUBRIC_FILE).write_text(
+        "# Task-specific Criteria, scored alongside the shared Rubric (1-5 each).\n"
+        + yaml.safe_dump(data, sort_keys=False, allow_unicode=True)
     )
 
 

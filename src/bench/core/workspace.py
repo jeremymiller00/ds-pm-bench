@@ -11,7 +11,7 @@ from typing import Any
 from bench.core.candidates import Candidate, load_candidates
 from bench.core.decisions import log_verdict, read_log
 from bench.core.errors import TaskNotRunnable, UnknownCandidateError, UnknownTaskError
-from bench.core.kinds import Suite
+from bench.core.kinds import Suite, Visibility
 from bench.core.lookup import find_by_id
 from bench.core.prices import PriceTable, load_prices
 from bench.core.results import TaskResult
@@ -23,16 +23,19 @@ from bench.core.runs import (
     choose_suite,
     create_run,
     open_run,
+    task_versions_used,
     tasks_in,
 )
 from bench.core.scoring import RunScore, score_run
 from bench.core.settings import Settings, load_settings
-from bench.core.tasks import Task, load_tasks
+from bench.core.tasks import CriterionSpec, Task, edit_task, load_tasks, scaffold_task
 from bench.core.verdicts import Comparison, Verdict, compare, gate_verdict
 
 
-@dataclass(frozen=True)
+@dataclass
 class Workspace:
+    """Opened from a benchmark repo. tasks is replaced when a Task is created or edited."""
+
     root: Path
     settings: Settings
     rubric: Rubric
@@ -62,6 +65,80 @@ class Workspace:
             "; no private roots are configured, so Private Tasks are not loaded"
         )
         raise UnknownTaskError(f"no Task {task_id!r}{hint}")
+
+    def create_task(
+        self,
+        task_id: str,
+        *,
+        track: str,
+        trap: str,
+        canonical_prompt: str,
+        criteria: Iterable[CriterionSpec],
+        manual_time_minutes: int | float | None = None,
+        private_root: str | Path | None = None,
+    ) -> Task:
+        """Scaffold a new Task at version 1 with a TODO input and Gold Answer.
+
+        It is a Public Task under tasks/ unless private_root names one of the
+        configured private roots (ADR-0006). criteria are the task-specific
+        Criteria, as Criterion or {id, name, description}. Invalid fields raise
+        ConfigError naming the field, and nothing is written.
+        """
+        if find_by_id(self.tasks, task_id) is not None:
+            raise ValueError(f"Task {task_id} already exists in {self.task(task_id).folder}")
+        root, visibility = self.root, Visibility.PUBLIC
+        if private_root is not None:
+            root, visibility = self._private_root(private_root), Visibility.PRIVATE
+        task = scaffold_task(
+            self.root,
+            root,
+            visibility,
+            task_id,
+            track=track,
+            trap=trap,
+            canonical_prompt=canonical_prompt,
+            criteria=criteria,
+            manual_time_minutes=manual_time_minutes,
+            shared=self.rubric,
+            tracks=self.settings.tracks,
+        )
+        self._reload_tasks()
+        return task
+
+    def update_task(self, task_id: str, **changes: Any) -> Task:
+        """Edit a Task's fields: track, trap, canonical_prompt, criteria,
+        manual_time_minutes, input (text) and gold_answer (text).
+
+        If any Run used the Task's current version, the edit is a new version;
+        otherwise it is made in place (ADR-0003). Visibility, id and version cannot
+        be edited (TaskEditRefused). Invalid fields raise ConfigError and the files
+        are left as they were.
+        """
+        task = self.task(task_id)
+        edited = edit_task(
+            self.root,
+            task,
+            changes,
+            used=(task.id, task.version) in task_versions_used(self.root),
+            shared=self.rubric,
+            tracks=self.settings.tracks,
+        )
+        self._reload_tasks()
+        return edited
+
+    def _private_root(self, path: str | Path) -> Path:
+        resolved = (self.root / Path(path).expanduser()).resolve()
+        if resolved not in self.settings.private_roots:
+            configured = ", ".join(map(str, self.settings.private_roots)) or "none"
+            raise ValueError(
+                f"{resolved} is not a configured private root (configured: {configured})"
+            )
+        return resolved
+
+    def _reload_tasks(self) -> None:
+        self.tasks = load_tasks(
+            self.root, self.settings.private_roots, self.rubric, self.settings.tracks
+        )
 
     def runnable_task(self, task_id: str) -> Task:
         """The Task; TaskNotRunnable if its input, Gold Answer or Manual Time is a placeholder."""
