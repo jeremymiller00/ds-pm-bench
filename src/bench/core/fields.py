@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import datetime
 from pathlib import Path
 from typing import Any
 
@@ -60,3 +61,21 @@ class FieldReader:
         for key in keys:
             if key not in data:
                 raise self.fail(f"{field}.{key}", "is missing")
+
+    def boolean(self, value: Any, field: str) -> bool:
+        if not isinstance(value, bool):
+            raise self.fail(field, f"must be true or false, got {value!r}")
+        return value
+
+    def choice(self, value: Any, field: str, options: tuple[str, ...]) -> str:
+        if value not in options:
+            raise self.fail(field, f"must be one of {', '.join(options)}, got {value!r}")
+        return value
+
+    def date(self, value: Any, field: str) -> datetime.date:
+        if isinstance(value, datetime.date) and not isinstance(value, datetime.datetime):
+            return value
+        try:
+            return datetime.date.fromisoformat(str(value))
+        except ValueError:
+            raise self.fail(field, f"must be a date like 2026-11-13, got {value!r}") from None

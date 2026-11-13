@@ -19,3 +19,7 @@ class UnknownTaskError(LookupError):
 
 class TaskNotRunnable(Exception):
     """The harness refuses to run a Task that still holds a placeholder."""
+
+
+class UnknownCandidateError(LookupError):
+    """No Candidate with the requested id."""
