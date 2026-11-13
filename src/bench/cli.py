@@ -73,22 +73,7 @@ def _run(ws: Workspace, args: argparse.Namespace) -> int:
         run = ws.resume_run(args.resume)
     else:
         run = ws.start_run(args.candidate, suite=args.suite, on=args.on)
-    results = Path(args.results)
-    for task_id in run.pending:
-        path = results / f"{task_id}.yaml"
-        if not path.is_file():
-            continue
-        record = yaml.safe_load(path.read_text())
-        run.record_output(
-            task_id,
-            raw=record["raw"],
-            final=record["final"],
-            active_seconds=record["active_seconds"],
-            latency_seconds=record["latency_seconds"],
-            cost_usd=record.get("cost_usd"),
-        )
-        if "criterion_scores" in record:
-            run.record_criterion_scores(task_id, record["criterion_scores"])
+    for task_id in run.record_from_folder(Path(args.results)):
         print(f"recorded {task_id}")
     print(f"Run {run.id}")
     if run.pending:

@@ -30,6 +30,7 @@ from bench.core.errors import (
     UnknownRunError,
     UnknownTaskError,
 )
+from bench.core.fields import FieldReader
 from bench.core.kinds import Clearance, Suite, Visibility
 from bench.core.lookup import find_by_id
 from bench.core.results import TaskResult
@@ -39,6 +40,16 @@ from bench.core.tasks import Task
 RUNS_FOLDER = "runs"
 RUN_FILE = "run.yaml"
 RESULTS_FOLDER = "results"
+
+# What a results file (the input to record_from_file) may hold.
+RESULTS_FILE_FIELDS = (
+    "raw",
+    "final",
+    "active_seconds",
+    "latency_seconds",
+    "cost_usd",
+    "criterion_scores",
+)
 
 
 @dataclass(frozen=True)
@@ -143,6 +154,48 @@ class Run:
         task_record["criterion_scores"] = dict(scores)
         self._write_task_record(task.id, task_record)
 
+    def record_from_file(self, path: Path) -> None:
+        """Record one Task's Output, and its Criterion scores if present, from a results file.
+
+        The file is <task id>.yaml holding raw, final, active_seconds, latency_seconds,
+        cost_usd (null or absent when there is no per-Task cost) and, optionally,
+        criterion_scores.
+        """
+        task_id = path.stem
+        f = FieldReader(str(path))
+        data = f.mapping(_load_yaml(f, path), "(file)")
+        for key in data:
+            if key not in RESULTS_FILE_FIELDS:
+                raise f.fail(str(key), f"unknown, expected one of {', '.join(RESULTS_FILE_FIELDS)}")
+        for key in ("raw", "final", "active_seconds", "latency_seconds"):
+            if key not in data:
+                raise f.fail(key, "is missing")
+        self.record_output(
+            task_id,
+            raw=str(data["raw"]),
+            final=str(data["final"]),
+            active_seconds=f.number(data["active_seconds"], "active_seconds", minimum=0),
+            latency_seconds=f.number(data["latency_seconds"], "latency_seconds", minimum=0),
+            cost_usd=(
+                None
+                if data.get("cost_usd") is None
+                else f.number(data["cost_usd"], "cost_usd", minimum=0)
+            ),
+        )
+        if "criterion_scores" in data:
+            scores = f.mapping(data["criterion_scores"], "criterion_scores")
+            self.record_criterion_scores(task_id, scores)
+
+    def record_from_folder(self, folder: Path) -> tuple[str, ...]:
+        """Record every pending Task that has a <task id>.yaml in folder; returns their ids."""
+        recorded = []
+        for task_id in self.pending:
+            path = folder / f"{task_id}.yaml"
+            if path.is_file():
+                self.record_from_file(path)
+                recorded.append(task_id)
+        return tuple(recorded)
+
     @property
     def pending(self) -> tuple[str, ...]:
         """Task ids in the Suite whose Output is not recorded yet, in Suite order."""
@@ -214,6 +267,13 @@ def edit_distance(raw: str, final: str) -> float:
             )
         previous = current
     return previous[-1] / max(len(a), len(b))
+
+
+def _load_yaml(f: FieldReader, path: Path) -> Any:
+    try:
+        return yaml.safe_load(path.read_text())
+    except yaml.YAMLError as exc:
+        raise f.fail("(file)", f"is not valid YAML: {exc}") from exc
 
 
 def run_id_for(candidate: Candidate, date: datetime.date) -> str:

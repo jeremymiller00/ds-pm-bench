@@ -394,3 +394,62 @@ def test_a_tasks_output_is_recorded_once(ws_dir: Path):
 
     with pytest.raises(ValueError, match="already recorded"):
         record(run, "T1.1")
+
+
+def write_result_file(folder: Path, task_id: str, **overrides) -> Path:
+    folder.mkdir(parents=True, exist_ok=True)
+    data = {
+        "raw": "one two three four five",
+        "final": "one two three four six",
+        "active_seconds": 600,
+        "latency_seconds": 12,
+        "cost_usd": 0.03,
+        "criterion_scores": SCORES,
+        **overrides,
+    }
+    path = folder / f"{task_id}.yaml"
+    path.write_text(yaml.safe_dump({k: v for k, v in data.items() if v is not ...}))
+    return path
+
+
+def test_a_run_records_every_pending_task_that_has_a_results_file(ws_dir: Path, tmp_path: Path):
+    results = tmp_path / "results"
+    write_result_file(results, "T1.1")
+    write_result_file(results, "T9.9")  # not in the Suite: ignored
+    run = Workspace.open(ws_dir).start_run("claude@opus-5-5", on=DAY)
+
+    assert run.record_from_folder(results) == ("T1.1",)
+
+    assert run.pending == ("T2.1",)
+    assert run.record_from_folder(results) == ()  # already recorded: nothing to do
+    write_result_file(results, "T2.1", cost_usd=None)
+    assert run.record_from_folder(results) == ("T2.1",)
+    assert [(r.task_id, r.edit_distance, r.cost_usd) for r in run.task_results()] == [
+        ("T1.1", 0.2, 0.03),
+        ("T2.1", 0.2, None),
+    ]
+
+
+def test_a_results_file_without_criterion_scores_leaves_the_task_unscored(
+    ws_dir: Path, tmp_path: Path
+):
+    results = tmp_path / "results"
+    write_result_file(results, "T1.1", criterion_scores=..., cost_usd=...)
+    run = Workspace.open(ws_dir).start_run("claude@opus-5-5", on=DAY)
+
+    run.record_from_file(results / "T1.1.yaml")
+
+    assert run.pending == ("T2.1",)
+    with pytest.raises(RunIncomplete, match="T1.1 has no Criterion scores"):
+        run.task_results()
+
+
+def test_a_results_file_missing_a_measure_fails_naming_the_file_and_field(
+    ws_dir: Path, tmp_path: Path
+):
+    path = write_result_file(tmp_path / "results", "T1.1", latency_seconds=...)
+    run = Workspace.open(ws_dir).start_run("claude@opus-5-5", on=DAY)
+
+    with pytest.raises(ValueError, match="T1.1.yaml.*latency_seconds"):
+        run.record_from_file(path)
+    assert run.pending == ("T1.1", "T2.1")
