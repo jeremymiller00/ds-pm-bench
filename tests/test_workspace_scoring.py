@@ -137,3 +137,17 @@ def test_task_weighted_score_follows_edited_weights(workspace_dir: Path):
 
     # (25*4 + 25*5 + 50*3 + 0*5) / 100
     assert task.weighted == pytest.approx(3.75)
+
+
+def test_track_quality_is_the_average_of_its_tasks_quality(workspace_dir: Path):
+    ws = Workspace.open(workspace_dir)
+
+    score = ws.score(
+        [
+            result(task_id="T1.1", track="Framing", criterion_scores={"correctness": 4}),
+            result(task_id="T1.2", track="Framing", criterion_scores={"correctness": 3}),
+            result(task_id="T2.1", track="Specs", criterion_scores={"correctness": 5, "clarity": 4}),
+        ]
+    )
+
+    assert score.track_quality == pytest.approx({"Framing": 3.5, "Specs": 4.5})

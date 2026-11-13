@@ -22,6 +22,7 @@ class TaskScore:
 @dataclass(frozen=True)
 class RunScore:
     tasks: tuple[TaskScore, ...]
+    track_quality: dict[str, float]  # Track -> average Quality over its Tasks
 
 
 def band_score(band: Band, value: float) -> int:
@@ -70,4 +71,12 @@ def score_task(settings: Settings, result: TaskResult) -> TaskScore:
 
 
 def score_run(settings: Settings, results: Iterable[TaskResult]) -> RunScore:
-    return RunScore(tasks=tuple(score_task(settings, r) for r in results))
+    tasks = tuple(score_task(settings, r) for r in results)
+    tracks = dict.fromkeys(t.track for t in tasks)
+    return RunScore(
+        tasks=tasks,
+        track_quality={
+            track: mean(t.dimensions["quality"] for t in tasks if t.track == track)
+            for track in tracks
+        },
+    )
