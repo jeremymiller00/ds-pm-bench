@@ -1,7 +1,11 @@
 # Golden Verdict path: a Spot-check found the Judge and human more than 1 point apart.
+# Recorded with `bench spot-check RUN TASK CRITERION SCORE` before `bench verdict`:
+# the Judge gave the challenger's clarity 5, the human 3.5.
 challenger: other@1
-verdict_args: ["--spot-check-disagreement", "1.5"]
+verdict_args: []
+spot_checks:
+  - {candidate: other@1, task: T1.1-example, criterion: clarity, score: 3.5}
 expected:
   outcome: re-test
   label: re-test (public-only Suite)
-  reason: "Spot-check: Judge and human differ by 1.5 points"
+  reason: "Spot-check: Judge and human differ by 1.5 points on T1.1-example clarity"

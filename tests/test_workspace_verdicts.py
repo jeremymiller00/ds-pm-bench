@@ -34,6 +34,13 @@ def complete_run(
 ) -> str:
     """Start and finish a Run; every Criterion of a Task gets that Task's quality score."""
     run = ws.start_run(candidate_id, on=on)
+    complete_run_tasks(run, quality=quality, active_seconds=active_seconds)
+    return run.id
+
+
+def complete_run_tasks(
+    run, *, quality: dict[str, float] | None = None, active_seconds: float = 600
+) -> None:
     for task in run.tasks:
         run.record_output(
             task.id,
@@ -45,16 +52,16 @@ def complete_run(
         )
         q = (quality or {}).get(task.id, 4)
         run.record_criterion_scores(task.id, {c.id: q for c in task.rubric.criteria})
-    return run.id
 
 
-def compare(ws_dir: Path, *, spot_check_disagreement: float | None = None, **challenger):
+def compare(ws_dir: Path, *, spot_checks: tuple = (), **challenger):
+    """Complete both Runs, record any (run, task, criterion, human score) Spot-checks, compare."""
     ws = Workspace.open(ws_dir)
-    baseline_run = complete_run(ws, BASELINE)
-    challenger_run = complete_run(ws, CHALLENGER, **challenger)
-    return ws.compare(
-        challenger_run, baseline_run, spot_check_disagreement=spot_check_disagreement
-    )
+    runs = {"baseline": complete_run(ws, BASELINE)}
+    runs["challenger"] = complete_run(ws, CHALLENGER, **challenger)
+    for which, task_id, criterion, human_score in spot_checks:
+        ws.resume_run(runs[which]).record_spot_check(task_id, criterion, human_score)
+    return ws.compare(runs["challenger"], runs["baseline"])
 
 
 def test_a_challenger_matching_the_baseline_is_adopted(ws_dir: Path):
@@ -101,15 +108,57 @@ def test_a_track_drop_within_the_regression_margin_is_not_a_regression(ws_dir: P
     assert comparison.verdict.regressions == ()
 
 
-def test_a_spot_check_disagreement_over_one_point_forces_a_retest(ws_dir: Path):
-    comparison = compare(ws_dir, spot_check_disagreement=1.5)
+def test_a_spot_check_more_than_one_point_from_the_judge_forces_a_retest(ws_dir: Path):
+    # The Judge gave every Criterion 4; the human gives clarity 2.5 and correctness 3.
+    spot_checks = (("challenger", "T1.1", "clarity", 2.5), ("challenger", "T2.1", "correctness", 3))
+
+    comparison = compare(ws_dir, spot_checks=spot_checks)
 
     assert comparison.verdict.outcome == "re-test"
-    assert any("Spot-check" in r for r in comparison.verdict.rationale)
+    (reason, *_) = comparison.verdict.rationale
+    assert reason.startswith("Spot-check: Judge and human differ by 1.5 points")
+    assert "T1.1 clarity" in reason
 
 
-def test_a_spot_check_disagreement_of_one_point_is_tolerated(ws_dir: Path):
-    assert compare(ws_dir, spot_check_disagreement=1).verdict.outcome == "adopt"
+def test_a_spot_check_on_the_baseline_run_counts_too(ws_dir: Path):
+    comparison = compare(ws_dir, spot_checks=(("baseline", "T2.1", "clarity", 2.5),))
+
+    assert comparison.verdict.outcome == "re-test"
+
+
+def test_a_spot_check_one_point_from_the_judge_is_tolerated(ws_dir: Path):
+    spot_checks = (("challenger", "T1.1", "clarity", 3), ("baseline", "T1.1", "clarity", 5))
+
+    assert compare(ws_dir, spot_checks=spot_checks).verdict.outcome == "adopt"
+
+
+def test_a_spot_check_is_kept_on_the_run(ws_dir: Path):
+    ws = Workspace.open(ws_dir)
+    run_id = complete_run(ws, CHALLENGER)
+    ws.resume_run(run_id).record_spot_check("T1.1", "clarity", 2)
+
+    (check,) = Workspace.open(ws_dir).resume_run(run_id).spot_checks
+    assert (check.task_id, check.criterion, check.judge_score, check.human_score) == (
+        "T1.1",
+        "clarity",
+        4,
+        2,
+    )
+    assert check.gap == 2
+
+
+def test_a_spot_check_needs_judge_scores_a_known_criterion_and_a_1_to_5_score(ws_dir: Path):
+    ws = Workspace.open(ws_dir)
+    run = ws.start_run(CHALLENGER, on=DAY)
+    with pytest.raises(ValueError, match="no Criterion scores"):
+        run.record_spot_check("T1.1", "clarity", 3)
+    complete_run_tasks(run)
+
+    with pytest.raises(ValueError, match="vibes"):
+        run.record_spot_check("T1.1", "vibes", 3)
+    with pytest.raises(ValueError, match="1-5"):
+        run.record_spot_check("T1.1", "clarity", 6)
+    assert run.spot_checks == ()
 
 
 @pytest.fixture
@@ -278,7 +327,8 @@ def test_the_decision_log_is_append_only(ws_dir: Path):
     first = ws.log_verdict(ws.compare(challenger_run, baseline_run).verdict, on=DAY)
     first_text = first.read_text()
 
-    retest = ws.compare(challenger_run, baseline_run, spot_check_disagreement=2)
+    ws.resume_run(challenger_run).record_spot_check("T1.1", "clarity", 2)
+    retest = ws.compare(challenger_run, baseline_run)
     second = ws.log_verdict(retest.verdict, on=DAY)
 
     assert first.read_text() == first_text

@@ -2,7 +2,8 @@
 
 Each tests/fixtures/golden/<case>/ holds the Candidates and per-Task result files
 for one Verdict path over the public examples/ Task; case.yaml names the
-challenger, any extra `bench verdict` arguments and the expected Verdict.
+challenger, any Spot-checks to record with `bench spot-check`, any extra
+`bench verdict` arguments and the expected Verdict.
 """
 
 import shutil
@@ -57,6 +58,10 @@ def test_bench_verdict_on_golden_fixture_runs_gives_the_expected_verdict(
     ws = golden_workspace(case, tmp_path)
     baseline_run = record_run(ws, case, BASELINE)
     challenger_run = record_run(ws, case, spec["challenger"])
+    for check in spec.get("spot_checks", []):
+        run_id = f"{DAY}-{check['candidate']}"
+        args = (check["task"], check["criterion"], str(check["score"]))
+        assert bench(ws, "spot-check", run_id, *args) == 0
     capsys.readouterr()
 
     assert bench(ws, "verdict", challenger_run, baseline_run, *spec["verdict_args"]) == 0
@@ -149,3 +154,18 @@ def test_bench_run_suite_public_only_narrows_a_private_clearance(tmp_path: Path,
     args = ("run", "other@1", "--suite", "public_only", "--results", str(results), "--on", DAY)
     assert bench(ws, *args) == 0
     assert Workspace.open(ws).resume_run(f"{DAY}-other@1").suite == "public_only"
+
+
+def test_bench_spot_check_records_a_human_score_and_reports_the_gap(tmp_path: Path, capsys):
+    ws = golden_workspace("adopt-public-only", tmp_path)
+    run_id = record_run(ws, "adopt-public-only", BASELINE)
+    capsys.readouterr()
+
+    assert bench(ws, "spot-check", run_id, "T1.1-example", "clarity", "2") == 0
+
+    out = capsys.readouterr().out
+    assert "T1.1-example clarity: human 2 vs Judge 4 (2 points apart)" in out
+    (check,) = Workspace.open(ws).resume_run(run_id).spot_checks
+    assert check.human_score == 2
+    assert bench(ws, "spot-check", run_id, "T1.1-example", "clarity", "6") == 1
+    assert "1-5" in capsys.readouterr().err

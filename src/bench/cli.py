@@ -3,6 +3,7 @@
   bench run CANDIDATE --results DIR [--on DATE] [--suite public_only]
                                                      start a Run and record results
   bench run --resume RUN_ID --results DIR            record results into an open Run
+  bench spot-check RUN TASK CRITERION SCORE         record a human Spot-check score
   bench score RUN_ID                                 print a Run's scores
   bench verdict CHALLENGER_RUN BASELINE_RUN [...]    compare two Runs, print the Verdict
   bench verdict --gate CANDIDATE [...]               the Verdict for a failed Gate
@@ -81,6 +82,15 @@ def _run(ws: Workspace, args: argparse.Namespace) -> int:
     return 0
 
 
+def _spot_check(ws: Workspace, args: argparse.Namespace) -> int:
+    check = ws.resume_run(args.run_id).record_spot_check(args.task, args.criterion, args.score)
+    print(
+        f"Spot-check {check.task_id} {check.criterion}: human {check.human_score:g} "
+        f"vs Judge {check.judge_score:g} ({check.gap:g} points apart)"
+    )
+    return 0
+
+
 def _score(ws: Workspace, args: argparse.Namespace) -> int:
     score = ws.score(ws.resume_run(args.run_id).task_results())
     print(f"Run {args.run_id}: weighted {score.weighted:.2f}")
@@ -102,9 +112,7 @@ def _verdict(ws: Workspace, args: argparse.Namespace) -> int:
         if len(args.runs) != 2:
             raise ValueError("give CHALLENGER_RUN and BASELINE_RUN, or --gate CANDIDATE")
         challenger, baseline = args.runs
-        verdict = ws.compare(
-            challenger, baseline, spot_check_disagreement=args.spot_check_disagreement
-        ).verdict
+        verdict = ws.compare(challenger, baseline).verdict
     _print_verdict(verdict)
     if args.log:
         path = ws.log_verdict(verdict, on=args.on, judge_setup_hash=args.judge_setup_hash)
@@ -151,6 +159,15 @@ def _parser() -> argparse.ArgumentParser:
     )
     run.set_defaults(command=_run)
 
+    spot = commands.add_parser(
+        "spot-check", help="record a human's 1-5 score of one Criterion the Judge scored"
+    )
+    spot.add_argument("run_id", metavar="RUN_ID")
+    spot.add_argument("task", metavar="TASK")
+    spot.add_argument("criterion", metavar="CRITERION")
+    spot.add_argument("score", type=float, metavar="SCORE", help="the human's 1-5 score")
+    spot.set_defaults(command=_spot_check)
+
     score = commands.add_parser("score", help="print a complete Run's scores")
     score.add_argument("run_id", metavar="RUN_ID")
     score.set_defaults(command=_score)
@@ -160,12 +177,6 @@ def _parser() -> argparse.ArgumentParser:
         "runs", nargs="*", metavar="RUN_ID", help="CHALLENGER_RUN BASELINE_RUN"
     )
     verdict.add_argument("--gate", metavar="CANDIDATE", help="reject a Candidate whose Gate failed")
-    verdict.add_argument(
-        "--spot-check-disagreement",
-        type=float,
-        metavar="POINTS",
-        help="largest Judge-versus-human gap recorded on a Spot-check of these Runs",
-    )
     verdict.add_argument("--log", action="store_true", help="append it to the Decision Log")
     verdict.add_argument("--on", type=_date, help="the Decision Log date (default: today)")
     verdict.add_argument("--judge-setup-hash", help="Judge setup recorded with the entry")

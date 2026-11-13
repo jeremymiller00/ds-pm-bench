@@ -4,7 +4,7 @@ runs/<date>-<candidate>/ in the public repo holds:
   run.yaml              the snapshot: Candidate, Task versions, date, Suite, and the
                         Tasks left out of the Suite as placeholders (excluded)
   results/<task>.yaml   numbers only per Task (timings, cost, Edit Distance, Criterion
-                        scores), with the Task's visibility
+                        scores, Spot-check human scores), with the Task's visibility
   raw/<task>.md         raw Output       } Public Tasks only; for a Private Task these
   final/<task>.md       edited final     } go under <private root>/runs/<run id>/
 """
@@ -196,6 +196,46 @@ class Run:
                 recorded.append(task_id)
         return tuple(recorded)
 
+    def record_spot_check(self, task_id: str, criterion: str, human_score: float) -> SpotCheck:
+        """Record a human's 1-5 score of one Criterion the Judge already scored.
+
+        Recording the same Task and Criterion again replaces the earlier human score.
+        """
+        task = self.task(task_id)
+        task_record = self._task_record(task.id)
+        if task_record is None or "criterion_scores" not in task_record:
+            raise ValueError(f"Run {self.id}: Task {task.id} has no Criterion scores to check")
+        if criterion not in task_record["criterion_scores"]:
+            raise ValueError(f"Task {task.id}: {criterion!r} is not a Criterion of its Rubric")
+        check_criterion_score(human_score, f"Task {task.id}: Spot-check {criterion}")
+        task_record.setdefault("spot_checks", {})[criterion] = human_score
+        self._write_task_record(task.id, task_record)
+        return SpotCheck(
+            run_id=self.id,
+            task_id=task.id,
+            criterion=criterion,
+            judge_score=task_record["criterion_scores"][criterion],
+            human_score=human_score,
+        )
+
+    @property
+    def spot_checks(self) -> tuple[SpotCheck, ...]:
+        """Every Spot-check recorded on this Run, in Suite order."""
+        checks = []
+        for task in self.tasks:
+            task_record = self._task_record(task.id) or {}
+            for criterion, human_score in task_record.get("spot_checks", {}).items():
+                checks.append(
+                    SpotCheck(
+                        run_id=self.id,
+                        task_id=task.id,
+                        criterion=criterion,
+                        judge_score=task_record["criterion_scores"][criterion],
+                        human_score=human_score,
+                    )
+                )
+        return tuple(checks)
+
     @property
     def pending(self) -> tuple[str, ...]:
         """Task ids in the Suite whose Output is not recorded yet, in Suite order."""
@@ -240,6 +280,22 @@ class Run:
 
     def _results_file(self, task_id: str) -> Path:
         return self.folder / RESULTS_FOLDER / f"{task_id}.yaml"
+
+
+@dataclass(frozen=True)
+class SpotCheck:
+    """A human's score of one Criterion beside the Judge's, on one Task of one Run."""
+
+    run_id: str
+    task_id: str
+    criterion: str
+    judge_score: float
+    human_score: float
+
+    @property
+    def gap(self) -> float:
+        """How many points apart the Judge and the human are."""
+        return abs(self.judge_score - self.human_score)
 
 
 @dataclass(frozen=True)

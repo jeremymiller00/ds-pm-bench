@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from bench.core.candidates import Candidate
 from bench.core.errors import SuiteMismatch
 from bench.core.kinds import Suite, Visibility
-from bench.core.runs import Run
+from bench.core.runs import Run, SpotCheck
 from bench.core.scoring import RunScore
 from bench.core.settings import Settings
 
@@ -64,15 +64,17 @@ def compare(
     challenger_score: RunScore,
     baseline: Run,
     baseline_score: RunScore,
-    spot_check_disagreement: float | None = None,
 ) -> Comparison:
     if not baseline.candidate.baseline:
         raise ValueError(
             f"Run {baseline.id} is of {baseline.candidate_id}, not the Baseline"
         )
     check_same_suite(challenger, baseline)
+    worst = max(
+        challenger.spot_checks + baseline.spot_checks, key=lambda c: c.gap, default=None
+    )
     outcome, rationale, regressions = apply_adopt_rule(
-        settings, challenger_score, baseline_score, spot_check_disagreement
+        settings, challenger_score, baseline_score, worst
     )
     warnings = ()
     days = abs((challenger.date - baseline.date).days)
@@ -140,13 +142,24 @@ def apply_adopt_rule(
     settings: Settings,
     challenger: RunScore,
     baseline: RunScore,
-    spot_check_disagreement: float | None = None,
+    worst_spot_check: SpotCheck | None = None,
 ) -> tuple[str, tuple[str, ...], tuple[str, ...]]:
     """The adopt rule for a challenger with a passing Gate (it has a Run).
 
-    Returns the outcome, its rationale and any Regressions. A recorded Spot-check
-    disagreement over the limit makes the Judge's scores suspect, so it forces a
-    re-test before the scores are weighed at all.
+    Returns the outcome, its rationale and any Regressions. The rules apply in a fixed
+    precedence, each only when every earlier one has passed:
+
+      1. Gate: a Candidate whose Gate has not passed is rejected without Runs
+         (gate_verdict); by the time this runs, the Gate has passed.
+      2. Spot-check: the worst recorded Spot-check, on either Run, more than
+         SPOT_CHECK_DISAGREEMENT_POINTS from the Judge forces a re-test. The scores
+         are then untrustworthy, so they cannot establish anything, not even a
+         Regression: rejecting on suspect scores would be as unfounded as adopting.
+      3. Regression: any Track whose Quality falls more than the regression margin
+         below the Baseline's rejects, however good the weighted total.
+      4. Adopt: a weighted total at least the Baseline's.
+      5. Re-test: a weighted total below, but within the re-test margin.
+      6. Reject: anything further below.
     """
     gap = round(challenger.weighted - baseline.weighted, 9)  # margins compare exactly
     regressions = tuple(
@@ -156,15 +169,14 @@ def apply_adopt_rule(
         > settings.regression_margin
     )
     scores = f"weighted {challenger.weighted:.2f} vs Baseline {baseline.weighted:.2f}"
-    if (
-        spot_check_disagreement is not None
-        and spot_check_disagreement > SPOT_CHECK_DISAGREEMENT_POINTS
-    ):
+    if worst_spot_check is not None and worst_spot_check.gap > SPOT_CHECK_DISAGREEMENT_POINTS:
+        c = worst_spot_check
         return (
             "re-test",
             (
-                f"Spot-check: Judge and human differ by {spot_check_disagreement:g} points, "
-                f"more than {SPOT_CHECK_DISAGREEMENT_POINTS}",
+                f"Spot-check: Judge and human differ by {c.gap:g} points on "
+                f"{c.task_id} {c.criterion} in Run {c.run_id} (Judge {c.judge_score:g}, "
+                f"human {c.human_score:g}), more than {SPOT_CHECK_DISAGREEMENT_POINTS}",
                 scores,
             ),
             regressions,
