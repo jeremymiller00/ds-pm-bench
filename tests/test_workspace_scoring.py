@@ -91,3 +91,13 @@ def test_cost_latency_averages_cost_and_latency_scores(
 
     assert task.dimensions["cost_latency"] == (cost_score + 5) / 2
     assert not task.latency_only
+
+
+def test_quality_is_the_average_of_the_tasks_criteria(workspace_dir: Path):
+    ws = Workspace.open(workspace_dir)
+    scores = {"correctness": 5, "completeness": 4, "clarity": 4, "pm_judgment": 2,
+              "format_fit": 3, "names_the_metric": 3}
+
+    task = ws.score([result(criterion_scores=scores)]).tasks[0]
+
+    assert task.dimensions["quality"] == pytest.approx(3.5)

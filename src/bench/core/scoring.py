@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from dataclasses import dataclass
+from statistics import mean
 
 from bench.core.results import TaskResult
 from bench.core.settings import Band, Settings
@@ -51,6 +52,7 @@ def score_task(settings: Settings, result: TaskResult) -> TaskScore:
         task_id=result.task_id,
         track=result.track,
         dimensions={
+            "quality": mean(result.criterion_scores.values()),
             "edit_distance": band_score(bands["edit_distance"], result.edit_distance),
             "time_saved": band_score(bands["time_saved"], time_saved(result)),
             "cost_latency": cost_latency(settings, result),
