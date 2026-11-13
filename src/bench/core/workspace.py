@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 
 from bench.core.settings import Settings, load_settings
 from bench.core.prices import PriceTable, load_prices
+from bench.core.results import TaskResult
 from bench.core.rubric import Rubric, load_rubric
+from bench.core.scoring import RunScore, score_run
 
 
 @dataclass(frozen=True)
@@ -26,3 +29,7 @@ class Workspace:
             rubric=load_rubric(root),
             prices=load_prices(root),
         )
+
+    def score(self, results: Iterable[TaskResult]) -> RunScore:
+        """Score a Run's per-Task result records with this Workspace's weights and bands."""
+        return score_run(self.settings, results)

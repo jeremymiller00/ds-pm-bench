@@ -1,6 +1,8 @@
 """DS PM Benchmark core library."""
 
 from bench.core.errors import ConfigError
+from bench.core.results import TaskResult
+from bench.core.scoring import RunScore, TaskScore
 from bench.core.workspace import Workspace
 
-__all__ = ["ConfigError", "Workspace"]
+__all__ = ["ConfigError", "RunScore", "TaskResult", "TaskScore", "Workspace"]
