@@ -8,7 +8,7 @@ from pathlib import Path
 from bench.core.settings import Settings, load_settings
 from bench.core.prices import PriceTable, load_prices
 from bench.core.rubric import Rubric, load_rubric
-from bench.core.errors import UnknownTaskError
+from bench.core.errors import TaskNotRunnable, UnknownTaskError
 from bench.core.tasks import Task, load_tasks
 
 
@@ -41,3 +41,13 @@ class Workspace:
             "; no private roots are configured, so Private Tasks are not loaded"
         )
         raise UnknownTaskError(f"no Task {task_id!r}{hint}")
+
+    def runnable_task(self, task_id: str) -> Task:
+        """The Task, or TaskNotRunnable if its input, Gold Answer or Manual Time is a placeholder."""
+        task = self.task(task_id)
+        if task.placeholders:
+            raise TaskNotRunnable(
+                f"Task {task.id} cannot be Run: {', '.join(task.placeholders)} "
+                "still a placeholder"
+            )
+        return task

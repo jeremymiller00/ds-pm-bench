@@ -15,3 +15,7 @@ class ConfigError(ValueError):
 
 class UnknownTaskError(LookupError):
     """No Task with the requested id in any loaded root."""
+
+
+class TaskNotRunnable(Exception):
+    """The harness refuses to run a Task that still holds a placeholder."""

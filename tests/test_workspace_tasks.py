@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from bench import ConfigError, Workspace
+from bench import ConfigError, TaskNotRunnable, Workspace
 
 
 def write_task(
@@ -189,3 +189,32 @@ def test_task_without_frontmatter_fails_naming_the_file(workspace_dir: Path):
         Workspace.open(workspace_dir)
 
     assert (err.value.file, err.value.field) == ("tasks/T1.2/task.md", "(frontmatter)")
+
+
+def test_complete_task_is_runnable(workspace_dir: Path):
+    write_task(workspace_dir, "T1.1")
+
+    assert Workspace.open(workspace_dir).runnable_task("T1.1").id == "T1.1"
+
+
+@pytest.mark.parametrize(
+    "task_args, missing",
+    [
+        (dict(input_text="TODO"), "input"),
+        (dict(gold="TODO: PM to write after sanitizing.\n"), "Gold Answer"),
+        (dict(gold="   \n"), "Gold Answer"),
+        (dict(manual_time="null"), "Manual Time"),
+    ],
+    ids=["todo-input", "todo-gold-with-note", "blank-gold", "untimed"],
+)
+def test_task_with_a_placeholder_loads_but_is_refused_for_running(
+    workspace_dir: Path, tmp_path: Path, task_args: dict, missing: str
+):
+    private = tmp_path / "bench-private"
+    write_task(private, "T3.1", track="Prioritize", **task_args)
+    configure_private_root(workspace_dir, private)
+    ws = Workspace.open(workspace_dir)
+
+    assert ws.task("T3.1").placeholders == (missing,)
+    with pytest.raises(TaskNotRunnable, match=f"T3.1.*{missing}"):
+        ws.runnable_task("T3.1")

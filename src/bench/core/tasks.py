@@ -38,13 +38,16 @@ class Task:
     track: str
     trap: str
     version: int
-    manual_time_minutes: int | float
+    manual_time_minutes: int | float | None  # None until timed once
     canonical_prompt: str
     rubric: Rubric
     visibility: str  # "public" or "private", from the root the Task lives in
     folder: Path
     input_path: Path
     gold_answer_path: Path
+    # What is still a placeholder ("input", "Gold Answer", "Manual Time").
+    # A Task with any placeholder loads, so it can be edited, but cannot be Run.
+    placeholders: tuple[str, ...]
 
 
 PUBLIC_TASK_FOLDERS = ("tasks",)
@@ -91,21 +94,42 @@ def load_task(
     version = meta.get("version")
     if isinstance(version, bool) or not isinstance(version, int) or version < 1:
         raise f.fail("version", f"must be a whole number of at least 1, got {version!r}")
+    manual_time = meta.get("manual_time_minutes")
+    if manual_time is not None:
+        manual_time = f.number(manual_time, "manual_time_minutes", minimum=0)
+    input_path = _input_path(f"{display}/input.*", folder)
+    gold_path = folder / GOLD_FILE
+    if not gold_path.is_file():
+        raise FieldReader(f"{display}/{GOLD_FILE}").fail("(file)", "is missing")
+    placeholders = tuple(
+        name
+        for name, missing in (
+            ("input", _is_placeholder(input_path)),
+            ("Gold Answer", _is_placeholder(gold_path)),
+            ("Manual Time", manual_time is None),
+        )
+        if missing
+    )
     return Task(
         id=task_id,
         track=track,
         trap=f.text(meta.get("trap"), "trap"),
         version=version,
-        manual_time_minutes=f.number(
-            meta.get("manual_time_minutes"), "manual_time_minutes", minimum=0
-        ),
+        manual_time_minutes=manual_time,
         canonical_prompt=prompt,
         rubric=_task_rubric(workspace_root, f"{display}/{RUBRIC_FILE}", shared),
         visibility=visibility,
         folder=folder,
-        input_path=_input_path(f"{display}/input.*", folder),
-        gold_answer_path=folder / GOLD_FILE,
+        input_path=input_path,
+        gold_answer_path=gold_path,
+        placeholders=placeholders,
     )
+
+
+def _is_placeholder(path: Path) -> bool:
+    """Empty, or starting with TODO (the scaffold's marker)."""
+    text = path.read_text(errors="replace").strip()
+    return not text or text.upper().startswith("TODO")
 
 
 def _task_rubric(workspace_root: Path, file: str, shared: Rubric) -> Rubric:
