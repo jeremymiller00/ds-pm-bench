@@ -5,6 +5,8 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 
+from bench.core.rubric import check_criterion_score
+
 
 @dataclass(frozen=True)
 class TaskResult:
@@ -33,8 +35,7 @@ class TaskResult:
         if not self.criterion_scores:
             self._fail("criterion_scores", "must hold at least one Criterion score")
         for cid, value in self.criterion_scores.items():
-            if not 1 <= value <= 5:
-                self._fail(f"criterion_scores.{cid}", f"must be 1-5, got {value}")
+            check_criterion_score(value, f"Task {self.task_id}: criterion_scores.{cid}")
         if not 0 <= self.edit_distance <= 1:
             self._fail("edit_distance", f"must be between 0 and 1, got {self.edit_distance}")
         if self.manual_minutes <= 0:

@@ -18,6 +18,7 @@ from typing import Any
 import yaml
 
 from bench.core.fields import FieldReader
+from bench.core.kinds import Visibility
 from bench.core.rubric import Rubric, parse_criteria
 
 TASK_FILE = "task.md"
@@ -41,8 +42,9 @@ class Task:
     manual_time_minutes: int | float | None  # None until timed once
     canonical_prompt: str
     rubric: Rubric
-    visibility: str  # "public" or "private", from the root the Task lives in
-    folder: Path
+    visibility: Visibility  # from the root the Task lives in
+    root: Path  # the Workspace root for a Public Task, its private root for a Private one
+    folder: Path  # <root>/<tasks or examples>/<id>
     input_path: Path
     gold_answer_path: Path
     # What is still a placeholder ("input", "Gold Answer", "Manual Time").
@@ -59,12 +61,12 @@ def load_tasks(
     workspace_root: Path, private_roots: tuple[Path, ...], shared: Rubric
 ) -> tuple[Task, ...]:
     """Public Tasks from the repo, then Private Tasks from each private root."""
-    sources = [(workspace_root / name, "public") for name in PUBLIC_TASK_FOLDERS]
-    sources += [(root / PRIVATE_TASK_FOLDER, "private") for root in private_roots]
+    sources = [(workspace_root, name, Visibility.PUBLIC) for name in PUBLIC_TASK_FOLDERS]
+    sources += [(root, PRIVATE_TASK_FOLDER, Visibility.PRIVATE) for root in private_roots]
     tasks: list[Task] = []
-    for parent, visibility in sources:
-        for folder in sorted(p for p in parent.glob("*") if p.is_dir()):
-            task = load_task(workspace_root, folder, visibility, shared)
+    for root, name, visibility in sources:
+        for folder in sorted(p for p in (root / name).glob("*") if p.is_dir()):
+            task = load_task(workspace_root, root, folder, visibility, shared)
             for other in tasks:
                 if other.id == task.id:
                     raise FieldReader(_display(workspace_root, folder / TASK_FILE)).fail(
@@ -75,7 +77,7 @@ def load_tasks(
 
 
 def load_task(
-    workspace_root: Path, folder: Path, visibility: str, shared: Rubric
+    workspace_root: Path, root: Path, folder: Path, visibility: Visibility, shared: Rubric
 ) -> Task:
     display = _display(workspace_root, folder)
     f = FieldReader(f"{display}/{TASK_FILE}")
@@ -122,6 +124,7 @@ def load_task(
         canonical_prompt=prompt,
         rubric=_task_rubric(workspace_root, f"{display}/{RUBRIC_FILE}", shared),
         visibility=visibility,
+        root=root,
         folder=folder,
         input_path=input_path,
         gold_answer_path=gold_path,

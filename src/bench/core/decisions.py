@@ -59,7 +59,7 @@ def _entry(
         "verdict": verdict.outcome,
         "label": verdict.label,
         "full_adopt": verdict.full_adopt,
-        "suite": verdict.suite,
+        "suite": None if verdict.suite is None else str(verdict.suite),
         "private_tasks": verdict.private_tasks,
         "judge_setup_hash": judge_setup_hash,
         "rationale": list(verdict.rationale),

@@ -13,12 +13,12 @@ from pathlib import Path
 from typing import Any
 
 from bench.core.fields import FieldReader
+from bench.core.kinds import Clearance
 
 CANDIDATES_FOLDER = "candidates"
 
 ADAPTER_KINDS = ("automated", "manual_assisted")
 GATE_RESULTS = ("pass", "fail")
-CLEARANCES = ("public_only", "public_and_private")
 
 CANDIDATE_FIELDS = ("tool", "version", "adapter", "settings", "env_vars", "baseline", "gate")
 GATE_FIELDS = (
@@ -46,7 +46,7 @@ class Gate:
     enterprise_terms: bool
     connector_support: str
     result: str  # "pass" or "fail"
-    clearance: str | None  # "public_only" or "public_and_private"; None when failed
+    clearance: Clearance | None  # None when failed
 
 
 @dataclass(frozen=True)
@@ -65,7 +65,7 @@ class Candidate:
         return self.gate is not None and self.gate.result == "pass"
 
     @property
-    def clearance(self) -> str | None:
+    def clearance(self) -> Clearance | None:
         """The Clearance a passing Gate grants; None without one."""
         return self.gate.clearance if self.gate_passed else None
 
@@ -133,7 +133,7 @@ def _gate(f: FieldReader, value: Any) -> Gate:
     result = f.choice(raw.get("result"), "gate.result", GATE_RESULTS)
     clearance = raw.get("clearance")
     if result == "pass" or clearance is not None:
-        clearance = f.choice(clearance, "gate.clearance", CLEARANCES)
+        clearance = f.enum(clearance, "gate.clearance", Clearance)
     return Gate(
         reviewer=f.text(raw.get("reviewer"), "gate.reviewer"),
         date=f.date(raw.get("date"), "gate.date"),

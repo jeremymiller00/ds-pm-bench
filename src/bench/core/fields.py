@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import datetime
+from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
@@ -71,6 +72,10 @@ class FieldReader:
         if value not in options:
             raise self.fail(field, f"must be one of {', '.join(options)}, got {value!r}")
         return value
+
+    def enum[E: StrEnum](self, value: Any, field: str, kind: type[E]) -> E:
+        options = tuple(str(member) for member in kind)
+        return kind(self.choice(value, field, options))
 
     def date(self, value: Any, field: str) -> datetime.date:
         if isinstance(value, datetime.date) and not isinstance(value, datetime.datetime):

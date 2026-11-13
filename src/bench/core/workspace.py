@@ -11,6 +11,7 @@ from typing import Any
 from bench.core.candidates import Candidate, load_candidates
 from bench.core.decisions import log_verdict, read_log
 from bench.core.errors import TaskNotRunnable, UnknownCandidateError, UnknownTaskError
+from bench.core.lookup import find_by_id
 from bench.core.prices import PriceTable, load_prices
 from bench.core.results import TaskResult
 from bench.core.rubric import Rubric, load_rubric
@@ -45,9 +46,9 @@ class Workspace:
         )
 
     def task(self, task_id: str) -> Task:
-        for task in self.tasks:
-            if task.id == task_id:
-                return task
+        task = find_by_id(self.tasks, task_id)
+        if task is not None:
+            return task
         hint = "" if self.settings.private_roots else (
             "; no private roots are configured, so Private Tasks are not loaded"
         )
@@ -69,10 +70,10 @@ class Workspace:
         return next((c for c in self.candidates if c.baseline), None)
 
     def candidate(self, candidate_id: str) -> Candidate:
-        for candidate in self.candidates:
-            if candidate.id == candidate_id:
-                return candidate
-        raise UnknownCandidateError(f"no Candidate {candidate_id!r} in candidates/")
+        candidate = find_by_id(self.candidates, candidate_id)
+        if candidate is None:
+            raise UnknownCandidateError(f"no Candidate {candidate_id!r} in candidates/")
+        return candidate
 
     def start_run(self, candidate_id: str, *, on: datetime.date | None = None) -> Run:
         """Start a Run of the Candidate over every Task its Clearance allows."""

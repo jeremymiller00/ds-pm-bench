@@ -6,7 +6,8 @@ from dataclasses import dataclass
 
 from bench.core.candidates import Candidate
 from bench.core.errors import SuiteMismatch
-from bench.core.runs import PRIVATE_CLEARANCE, Run
+from bench.core.kinds import Suite, Visibility
+from bench.core.runs import Run
 from bench.core.scoring import RunScore
 from bench.core.settings import Settings
 
@@ -22,7 +23,7 @@ SAME_WEEK_DAYS = 7
 @dataclass(frozen=True)
 class Verdict:
     outcome: str  # "adopt", "reject" or "re-test"
-    suite: str | None  # "public_only" or "public_and_private"; None without Runs (Gate failed)
+    suite: Suite | None  # None without Runs (Gate failed)
     rationale: tuple[str, ...]  # why, one reason per line, for the Decision Log
     candidate_id: str
     candidate_version: str
@@ -37,11 +38,11 @@ class Verdict:
     @property
     def full_adopt(self) -> bool:
         """Only an adopt over a public-and-private Suite counts as a full adopt."""
-        return self.outcome == "adopt" and self.suite == PRIVATE_CLEARANCE
+        return self.outcome == "adopt" and self.suite == Suite.PUBLIC_AND_PRIVATE
 
     @property
     def label(self) -> str:
-        if self.suite != "public_only":
+        if self.suite != Suite.PUBLIC_ONLY:
             return self.outcome
         if self.outcome == "adopt":
             return "adopt (public-only Suite, not a full adopt)"
@@ -74,7 +75,7 @@ def compare(
             f"Run {baseline.id} is of {baseline.candidate_id}, not the Baseline"
         )
     check_same_suite(challenger, baseline)
-    outcome, rationale, regressions = decide(
+    outcome, rationale, regressions = apply_adopt_rule(
         settings, challenger_score, baseline_score, spot_check_disagreement
     )
     warnings = ()
@@ -89,7 +90,7 @@ def compare(
         candidate_version=challenger.candidate.version,
         baseline_id=baseline.candidate_id,
         baseline_version=baseline.candidate.version,
-        private_tasks=sum(t.visibility == "private" for t in challenger.tasks),
+        private_tasks=sum(t.visibility == Visibility.PRIVATE for t in challenger.tasks),
         regressions=regressions,
         challenger_run_id=challenger.id,
         baseline_run_id=baseline.id,
@@ -139,7 +140,7 @@ def check_same_suite(challenger: Run, baseline: Run) -> None:
     )
 
 
-def decide(
+def apply_adopt_rule(
     settings: Settings,
     challenger: RunScore,
     baseline: RunScore,

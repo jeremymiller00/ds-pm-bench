@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from bench.core.fields import FieldReader
+from bench.core.lookup import find_by_id
 
 RUBRIC_FILE = "config/rubric.yaml"
 
@@ -26,10 +27,19 @@ class Rubric:
     criteria: tuple[Criterion, ...]
 
     def criterion(self, criterion_id: str) -> Criterion:
-        for c in self.criteria:
-            if c.id == criterion_id:
-                return c
-        raise KeyError(criterion_id)
+        criterion = find_by_id(self.criteria, criterion_id)
+        if criterion is None:
+            raise KeyError(criterion_id)
+        return criterion
+
+
+def check_criterion_score(value: Any, where: str) -> int | float:
+    """The one check of a Criterion score, from a Judge or a human: a number from 1 to 5."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(f"{where}: must be a 1-5 number, got {value!r}")
+    if not 1 <= value <= 5:
+        raise ValueError(f"{where}: must be 1-5, got {value}")
+    return value
 
 
 def load_rubric(root: Path) -> Rubric:

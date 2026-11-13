@@ -28,14 +28,15 @@ from bench.core.errors import (
     UnknownRunError,
     UnknownTaskError,
 )
+from bench.core.kinds import Clearance, Suite, Visibility
+from bench.core.lookup import find_by_id
 from bench.core.results import TaskResult
+from bench.core.rubric import check_criterion_score
 from bench.core.tasks import Task
 
 RUNS_FOLDER = "runs"
 RUN_FILE = "run.yaml"
 RESULTS_FOLDER = "results"
-
-PRIVATE_CLEARANCE = "public_and_private"
 
 
 @dataclass(frozen=True)
@@ -43,7 +44,7 @@ class Run:
     id: str
     candidate: Candidate
     date: datetime.date
-    suite: str  # "public_only" or "public_and_private"
+    suite: Suite
     tasks: tuple[Task, ...]  # the Suite, at the versions this Run uses
     folder: Path  # runs/<id>/ in the public repo
     # Every Task the Workspace loaded, so a request for one outside the Suite is
@@ -59,25 +60,23 @@ class Run:
         return {t.id: t.version for t in self.tasks}
 
     def task(self, task_id: str) -> Task:
-        for task in self.tasks:
-            if task.id == task_id:
-                return task
-        raise UnknownTaskError(f"Task {task_id!r} is not in Run {self.id}")
+        task = find_by_id(self.tasks, task_id)
+        if task is None:
+            raise UnknownTaskError(f"Task {task_id!r} is not in Run {self.id}")
+        return task
 
     def task_input(self, task_id: str) -> str:
         """What is sent to (or shown for) the Candidate: the Canonical Prompt, then the input."""
-        for task in self.workspace_tasks:
-            if task.id == task_id:
-                check_clearance(self.candidate, task)  # before any content is read
+        known = find_by_id(self.workspace_tasks, task_id)
+        if known is not None:
+            check_clearance(self.candidate, known)  # before any content is read
         task = self.task(task_id)
         return f"{task.canonical_prompt}\n\n{task.input_path.read_text().strip()}"
 
-
     def content_folder(self, task: Task) -> Path:
         """Where a Task's content-bearing files go: the private root for a Private Task."""
-        if task.visibility == "private":
-            private_root = task.folder.parent.parent  # <private root>/tasks/<id>
-            return private_root / RUNS_FOLDER / self.id
+        if task.visibility == Visibility.PRIVATE:
+            return task.root / RUNS_FOLDER / self.id
         return self.folder
 
     def record_output(
@@ -96,7 +95,7 @@ class Run:
         latency_seconds is the time to first draft.
         """
         task = self.task(task_id)
-        if self._numbers(task.id) is not None:
+        if self._task_record(task.id) is not None:
             raise ValueError(f"Run {self.id}: Task {task.id}'s Output is already recorded")
         record = OutputRecord(
             task_id=task.id,
@@ -109,24 +108,23 @@ class Run:
         for name, text in (("raw", raw), ("final", final)):
             (content / name).mkdir(parents=True, exist_ok=True)
             (content / name / f"{task.id}.md").write_text(text)
-        numbers = {
+        task_record = {
             "task": task.id,
             "version": task.version,
-            "visibility": task.visibility,
+            "visibility": str(task.visibility),
             "edit_distance": record.edit_distance,
             "active_seconds": active_seconds,
             "latency_seconds": latency_seconds,
             "cost_usd": cost_usd,
         }
-        (self.folder / RESULTS_FOLDER).mkdir(exist_ok=True)
-        _results_file(self, task.id).write_text(yaml.safe_dump(numbers, sort_keys=False))
+        self._write_task_record(task.id, task_record)
         return record
 
     def record_criterion_scores(self, task_id: str, scores: Mapping[str, float]) -> None:
         """Save the Judge's 1-5 Criterion scores for a Task whose Output is recorded."""
         task = self.task(task_id)
-        numbers = self._numbers(task.id)
-        if numbers is None:
+        task_record = self._task_record(task.id)
+        if task_record is None:
             raise ValueError(f"Run {self.id}: Task {task.id} has no Output to score yet")
         expected = {c.id for c in task.rubric.criteria}
         if set(scores) != expected:
@@ -137,32 +135,29 @@ class Run:
                 f"missing {missing}, unknown {extra}"
             )
         for cid, value in scores.items():
-            if isinstance(value, bool) or not isinstance(value, (int, float)):
-                raise ValueError(f"Task {task.id}: {cid} must be a 1-5 number, got {value!r}")
-            if not 1 <= value <= 5:
-                raise ValueError(f"Task {task.id}: {cid} must be 1-5, got {value}")
-        numbers["criterion_scores"] = dict(scores)
-        _results_file(self, task.id).write_text(yaml.safe_dump(numbers, sort_keys=False))
+            check_criterion_score(value, f"Task {task.id}: {cid}")
+        task_record["criterion_scores"] = dict(scores)
+        self._write_task_record(task.id, task_record)
 
     @property
     def pending(self) -> tuple[str, ...]:
         """Task ids in the Suite whose Output is not recorded yet, in Suite order."""
-        return tuple(t.id for t in self.tasks if self._numbers(t.id) is None)
+        return tuple(t.id for t in self.tasks if self._task_record(t.id) is None)
 
     def task_results(self) -> tuple[TaskResult, ...]:
         """One TaskResult per Task, for Workspace.score. Refuses an incomplete Run."""
         missing = []
         for task in self.tasks:
-            numbers = self._numbers(task.id)
-            if numbers is None:
+            task_record = self._task_record(task.id)
+            if task_record is None:
                 missing.append(f"{task.id} has no Output")
-            elif "criterion_scores" not in numbers:
+            elif "criterion_scores" not in task_record:
                 missing.append(f"{task.id} has no Criterion scores")
         if missing:
             raise RunIncomplete(f"Run {self.id} is incomplete: {'; '.join(missing)}")
         results = []
         for task in self.tasks:
-            n = self._numbers(task.id)
+            n = self._task_record(task.id)
             results.append(
                 TaskResult(
                     task_id=task.id,
@@ -177,9 +172,17 @@ class Run:
             )
         return tuple(results)
 
-    def _numbers(self, task_id: str) -> dict[str, Any] | None:
-        path = _results_file(self, task_id)
+    def _task_record(self, task_id: str) -> dict[str, Any] | None:
+        """The Task's results/<task>.yaml (numbers only), or None before its Output."""
+        path = self._results_file(task_id)
         return yaml.safe_load(path.read_text()) if path.is_file() else None
+
+    def _write_task_record(self, task_id: str, task_record: dict[str, Any]) -> None:
+        (self.folder / RESULTS_FOLDER).mkdir(exist_ok=True)
+        self._results_file(task_id).write_text(yaml.safe_dump(task_record, sort_keys=False))
+
+    def _results_file(self, task_id: str) -> Path:
+        return self.folder / RESULTS_FOLDER / f"{task_id}.yaml"
 
 
 @dataclass(frozen=True)
@@ -209,11 +212,7 @@ def edit_distance(raw: str, final: str) -> float:
     return previous[-1] / max(len(a), len(b))
 
 
-def _results_file(run: Run, task_id: str) -> Path:
-    return run.folder / RESULTS_FOLDER / f"{task_id}.yaml"
-
-
-def run_id(candidate: Candidate, date: datetime.date) -> str:
+def run_id_for(candidate: Candidate, date: datetime.date) -> str:
     return f"{date.isoformat()}-{candidate.id}"
 
 
@@ -224,7 +223,8 @@ def check_gate(candidate: Candidate) -> None:
 
 def check_clearance(candidate: Candidate, task: Task) -> None:
     """Call before reading any of a Private Task's content on the Candidate's behalf."""
-    if task.visibility == "private" and candidate.clearance != PRIVATE_CLEARANCE:
+    private = task.visibility == Visibility.PRIVATE
+    if private and candidate.clearance != Clearance.PUBLIC_AND_PRIVATE:
         raise ClearanceError(
             f"Task {task.id} is private and Candidate {candidate.id} is cleared for "
             f"{candidate.clearance or 'nothing'}"
@@ -233,9 +233,9 @@ def check_clearance(candidate: Candidate, task: Task) -> None:
 
 def suite_for(candidate: Candidate, tasks: tuple[Task, ...]) -> tuple[Task, ...]:
     """Every Task the Candidate's Clearance allows."""
-    if candidate.clearance == PRIVATE_CLEARANCE:
+    if candidate.clearance == Clearance.PUBLIC_AND_PRIVATE:
         return tasks
-    return tuple(t for t in tasks if t.visibility == "public")
+    return tuple(t for t in tasks if t.visibility == Visibility.PUBLIC)
 
 
 def create_run(
@@ -248,20 +248,20 @@ def create_run(
     check_gate(candidate)
     for task in suite:
         check_clearance(candidate, task)
-    rid = run_id(candidate, date)
-    if (workspace_root / RUNS_FOLDER / rid).exists():
-        raise RunExists(f"Run {rid} already exists; resume it instead")
+    run_id = run_id_for(candidate, date)
+    if (workspace_root / RUNS_FOLDER / run_id).exists():
+        raise RunExists(f"Run {run_id} already exists; resume it instead")
     run = Run(
-        id=rid,
+        id=run_id,
         candidate=candidate,
         date=date,
         suite=(
-            PRIVATE_CLEARANCE
-            if any(t.visibility == "private" for t in suite)
-            else "public_only"
+            Suite.PUBLIC_AND_PRIVATE
+            if any(t.visibility == Visibility.PRIVATE for t in suite)
+            else Suite.PUBLIC_ONLY
         ),
         tasks=suite,
-        folder=workspace_root / RUNS_FOLDER / rid,
+        folder=workspace_root / RUNS_FOLDER / run_id,
         workspace_tasks=workspace_tasks,
     )
     run.folder.mkdir(parents=True)
@@ -274,7 +274,7 @@ def _snapshot(run: Run) -> dict[str, Any]:
     return {
         "id": run.id,
         "date": run.date.isoformat(),
-        "suite": run.suite,
+        "suite": str(run.suite),
         "candidate": {
             "id": c.id,
             "tool": c.tool,
@@ -288,14 +288,14 @@ def _snapshot(run: Run) -> dict[str, Any]:
 
 def open_run(
     workspace_root: Path,
-    rid: str,
+    run_id: str,
     candidates: Mapping[str, Candidate],
     workspace_tasks: tuple[Task, ...],
 ) -> Run:
     """Load a Run from its snapshot, refusing if anything it used has changed (ADR-0003)."""
-    folder = workspace_root / RUNS_FOLDER / rid
+    folder = workspace_root / RUNS_FOLDER / run_id
     if not (folder / RUN_FILE).is_file():
-        raise UnknownRunError(f"no Run {rid!r} in {RUNS_FOLDER}/")
+        raise UnknownRunError(f"no Run {run_id!r} in {RUNS_FOLDER}/")
     snapshot = yaml.safe_load((folder / RUN_FILE).read_text())
     snapped = snapshot["candidate"]
     candidate = candidates.get(snapped["id"])
@@ -303,7 +303,7 @@ def open_run(
         snapped["version"],
         snapped["settings"],
     ):
-        raise RunMismatch(f"Run {rid}: Candidate {snapped['id']} is missing or has changed")
+        raise RunMismatch(f"Run {run_id}: Candidate {snapped['id']} is missing or has changed")
     check_gate(candidate)
     by_id = {t.id: t for t in workspace_tasks}
     suite = []
@@ -311,14 +311,14 @@ def open_run(
         task = by_id.get(task_id)
         if task is None or task.version != version:
             found = "missing" if task is None else f"now version {task.version}"
-            raise RunMismatch(f"Run {rid} used Task {task_id} version {version}, {found}")
+            raise RunMismatch(f"Run {run_id} used Task {task_id} version {version}, {found}")
         check_clearance(candidate, task)
         suite.append(task)
     return Run(
-        id=rid,
+        id=run_id,
         candidate=candidate,
         date=datetime.date.fromisoformat(snapshot["date"]),
-        suite=snapshot["suite"],
+        suite=Suite(snapshot["suite"]),
         tasks=tuple(suite),
         folder=folder,
         workspace_tasks=workspace_tasks,
