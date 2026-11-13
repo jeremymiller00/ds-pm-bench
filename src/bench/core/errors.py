@@ -47,3 +47,7 @@ class RunMismatch(Exception):
 
 class RunIncomplete(Exception):
     """A Run cannot produce TaskResults until every Task has an Output and Criterion scores."""
+
+
+class SuiteMismatch(Exception):
+    """Two Runs cannot be compared: they do not cover the same Tasks at the same versions."""

@@ -7,6 +7,7 @@ from bench.core.errors import (
     RunExists,
     RunIncomplete,
     RunMismatch,
+    SuiteMismatch,
     TaskNotRunnable,
     UnknownCandidateError,
     UnknownRunError,
@@ -14,9 +15,11 @@ from bench.core.errors import (
 )
 from bench.core.results import TaskResult
 from bench.core.scoring import RunScore, TaskScore
+from bench.core.verdicts import Comparison, Verdict
 from bench.core.workspace import Workspace
 
 __all__ = [
+    "Comparison",
     "ClearanceError",
     "ConfigError",
     "GateNotPassed",
@@ -24,11 +27,13 @@ __all__ = [
     "RunIncomplete",
     "RunMismatch",
     "RunScore",
+    "SuiteMismatch",
     "TaskNotRunnable",
     "TaskResult",
     "TaskScore",
     "UnknownCandidateError",
     "UnknownRunError",
     "UnknownTaskError",
+    "Verdict",
     "Workspace",
 ]

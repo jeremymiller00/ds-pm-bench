@@ -3,10 +3,10 @@ from pathlib import Path
 
 import pytest
 
-from bench import Workspace
+from bench import SuiteMismatch, Workspace
 from test_workspace_candidates import write_candidate
 from test_workspace_runs import cleared
-from test_workspace_tasks import write_task
+from test_workspace_tasks import configure_private_root, write_task
 
 DAY = datetime.date(2026, 11, 13)
 BASELINE = "claude@opus-5-5"
@@ -109,3 +109,84 @@ def test_a_spot_check_disagreement_over_one_point_forces_a_retest(ws_dir: Path):
 
 def test_a_spot_check_disagreement_of_one_point_is_tolerated(ws_dir: Path):
     assert compare(ws_dir, spot_check_disagreement=1).verdict.outcome == "adopt"
+
+
+@pytest.fixture
+def private_ws_dir(ws_dir: Path, tmp_path: Path) -> Path:
+    """ws_dir plus a Private Task, with both Candidates cleared for it."""
+    private = tmp_path / "bench-private"
+    write_task(private, "T3.1", track="Prioritize")
+    configure_private_root(ws_dir, private)
+    write_candidate(ws_dir, BASELINE, cleared("public_and_private", baseline=True))
+    write_candidate(ws_dir, CHALLENGER, cleared("public_and_private", version="other-1"))
+    return ws_dir
+
+
+def test_an_adopt_over_a_public_and_private_suite_is_a_full_adopt(private_ws_dir: Path):
+    verdict = compare(private_ws_dir).verdict
+
+    assert (verdict.outcome, verdict.suite, verdict.full_adopt) == (
+        "adopt",
+        "public_and_private",
+        True,
+    )
+    assert verdict.label == "adopt"
+    assert verdict.private_tasks == 1
+
+
+def test_a_public_only_suite_gives_a_labelled_verdict_that_is_not_a_full_adopt(
+    ws_dir: Path,
+):
+    verdict = compare(ws_dir).verdict
+
+    assert (verdict.outcome, verdict.suite, verdict.full_adopt) == (
+        "adopt",
+        "public_only",
+        False,
+    )
+    assert verdict.label == "adopt (public-only Suite, not a full adopt)"
+    assert verdict.private_tasks == 0
+
+
+def test_a_public_only_reject_is_labelled_too(ws_dir: Path):
+    verdict = compare(ws_dir, active_seconds=2700).verdict
+
+    assert verdict.label == "reject (public-only Suite)"
+
+
+def test_runs_over_different_suites_cannot_be_compared(private_ws_dir: Path):
+    write_candidate(private_ws_dir, CHALLENGER, cleared("public_only", version="other-1"))
+    ws = Workspace.open(private_ws_dir)
+    baseline_run = complete_run(ws, BASELINE)
+    challenger_run = complete_run(ws, CHALLENGER)
+
+    with pytest.raises(SuiteMismatch, match="T3.1"):
+        ws.compare(challenger_run, baseline_run)
+
+
+def test_runs_more_than_a_week_apart_are_compared_with_a_warning(ws_dir: Path):
+    ws = Workspace.open(ws_dir)
+    baseline_run = complete_run(ws, BASELINE)
+    challenger_run = complete_run(ws, CHALLENGER, on=DAY + datetime.timedelta(days=8))
+
+    comparison = ws.compare(challenger_run, baseline_run)
+
+    assert comparison.warnings == ("the Runs are 8 days apart, more than a week",)
+    assert comparison.verdict.outcome == "adopt"
+
+
+def test_runs_a_week_apart_get_no_warning(ws_dir: Path):
+    ws = Workspace.open(ws_dir)
+    baseline_run = complete_run(ws, BASELINE)
+    challenger_run = complete_run(ws, CHALLENGER, on=DAY - datetime.timedelta(days=7))
+
+    assert ws.compare(challenger_run, baseline_run).warnings == ()
+
+
+def test_the_baseline_run_must_be_a_run_of_the_baseline(ws_dir: Path):
+    ws = Workspace.open(ws_dir)
+    baseline_run = complete_run(ws, BASELINE)
+    challenger_run = complete_run(ws, CHALLENGER)
+
+    with pytest.raises(ValueError, match="not the Baseline"):
+        ws.compare(baseline_run, challenger_run)
