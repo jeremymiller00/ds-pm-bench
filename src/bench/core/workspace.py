@@ -50,7 +50,7 @@ class Workspace:
             settings=settings,
             rubric=rubric,
             prices=load_prices(root),
-            tasks=load_tasks(root, settings.private_roots, rubric),
+            tasks=load_tasks(root, settings.private_roots, rubric, settings.tracks),
             candidates=load_candidates(root),
         )
 

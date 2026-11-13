@@ -1,4 +1,4 @@
-"""Benchmark settings: config/settings.yaml (weights, margins, thresholds, bands, roots)."""
+"""Benchmark settings: config/settings.yaml (Tracks, weights, margins, bands, roots)."""
 
 from __future__ import annotations
 
@@ -32,6 +32,7 @@ class CalibrationThresholds:
 
 @dataclass(frozen=True)
 class Settings:
+    tracks: tuple[str, ...]  # in catalog order
     weights: dict[str, int | float]
     regression_margin: float
     retest_margin: float
@@ -47,6 +48,7 @@ def load_settings(root: Path) -> Settings:
     calibration = f.mapping(data.get("calibration"), "calibration")
     f.exact_keys(calibration, "calibration", ("within_one_point", "weighted_kappa"))
     return Settings(
+        tracks=_tracks(f, data.get("tracks")),
         weights=_weights(f, data.get("weights")),
         regression_margin=f.number(
             data.get("regression_margin"), "regression_margin", minimum=0
@@ -64,6 +66,18 @@ def load_settings(root: Path) -> Settings:
         normalization=_normalization(f, data.get("normalization")),
         private_roots=_private_roots(f, root, data.get("private_roots", [])),
     )
+
+
+def _tracks(f: FieldReader, value: Any) -> tuple[str, ...]:
+    if not isinstance(value, list) or not value:
+        raise f.fail("tracks", "must be a non-empty list of Track names")
+    tracks: list[str] = []
+    for i, entry in enumerate(value):
+        name = f.text(entry, f"tracks[{i}]")
+        if name in tracks:
+            raise f.fail(f"tracks[{i}]", f"duplicate Track {name!r}")
+        tracks.append(name)
+    return tuple(tracks)
 
 
 def _private_roots(f: FieldReader, root: Path, value: Any) -> tuple[Path, ...]:

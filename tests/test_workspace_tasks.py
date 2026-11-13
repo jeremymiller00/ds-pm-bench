@@ -2,6 +2,7 @@ import shutil
 from pathlib import Path
 
 import pytest
+import yaml
 
 from bench import ConfigError, TaskNotRunnable, Workspace
 
@@ -132,7 +133,6 @@ def test_the_same_task_id_in_two_roots_is_rejected(workspace_dir: Path, tmp_path
     "task_args, file, field",
     [
         (dict(track="Roadmaps"), "task.md", "track"),
-        (dict(track="Specs"), "task.md", "track"),
         (dict(version="0"), "task.md", "version"),
         (dict(version="'2'"), "task.md", "version"),
         (dict(manual_time="-5"), "task.md", "manual_time_minutes"),
@@ -153,7 +153,6 @@ def test_the_same_task_id_in_two_roots_is_rejected(workspace_dir: Path, tmp_path
     ],
     ids=[
         "unknown-track",
-        "track-disagrees-with-id",
         "version-below-1",
         "version-not-integer",
         "negative-manual-time",
@@ -184,6 +183,29 @@ def test_task_id_must_follow_the_track_numbering(workspace_dir: Path):
         Workspace.open(workspace_dir)
 
     assert (err.value.file, err.value.field) == ("tasks/Framing-1/task.md", "id")
+
+
+def test_a_tasks_track_is_any_track_defined_in_settings(workspace_dir: Path):
+    settings = workspace_dir / "config" / "settings.yaml"
+    data = yaml.safe_load(settings.read_text())
+    data["tracks"] = [*data["tracks"], "Roadmaps"]
+    settings.write_text(yaml.safe_dump(data))
+    write_task(workspace_dir, "T5.1", track="Roadmaps")
+    write_task(workspace_dir, "T1.2", track="Specs")  # the id's number implies nothing
+
+    ws = Workspace.open(workspace_dir)
+
+    assert (ws.task("T5.1").track, ws.task("T1.2").track) == ("Roadmaps", "Specs")
+
+
+def test_a_track_not_defined_in_settings_fails_naming_the_settings(workspace_dir: Path):
+    write_task(workspace_dir, "T5.1", track="Roadmaps")
+
+    with pytest.raises(ConfigError) as err:
+        Workspace.open(workspace_dir)
+
+    assert (err.value.file, err.value.field) == ("tasks/T5.1/task.md", "track")
+    assert "config/settings.yaml" in err.value.message
 
 
 def test_task_without_frontmatter_fails_naming_the_file(workspace_dir: Path):

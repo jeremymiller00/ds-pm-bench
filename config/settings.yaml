@@ -1,5 +1,9 @@
 # Benchmark settings. Edit in the TUI or by hand; validated on every load.
 
+# Tracks, in catalog order: the groups of Tasks that Regressions are judged on.
+# Each Task's task.md names its Track, which must be one of these.
+tracks: [Framing, Specs, Prioritize, Story]
+
 # Dimension weights (percent). Must sum to 100.
 weights:
   quality: 50

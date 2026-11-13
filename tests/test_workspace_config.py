@@ -95,6 +95,9 @@ def test_default_config_has_spec_margins_and_thresholds(workspace_dir: Path):
         ),
         ("calibration", "{within_one_point: 0.9}", "calibration.weighted_kappa"),
         ("calibration", "0.9", "calibration"),
+        ("tracks", "[]", "tracks"),
+        ("tracks", "[Framing, Framing]", "tracks[1]"),
+        ("tracks", "[Framing, '']", "tracks[1]"),
     ],
     ids=[
         "negative-regression-margin",
@@ -104,6 +107,9 @@ def test_default_config_has_spec_margins_and_thresholds(workspace_dir: Path):
         "within-one-point-as-percent",
         "missing-kappa",
         "calibration-not-a-mapping",
+        "no-tracks",
+        "duplicate-track",
+        "blank-track",
     ],
 )
 def test_invalid_margins_and_thresholds_fail_naming_the_field(
@@ -115,6 +121,15 @@ def test_invalid_margins_and_thresholds_fail_naming_the_field(
         Workspace.open(workspace_dir)
 
     assert (err.value.file, err.value.field) == ("config/settings.yaml", field)
+
+
+def test_default_config_defines_the_four_tracks_in_catalog_order(workspace_dir: Path):
+    assert Workspace.open(workspace_dir).settings.tracks == (
+        "Framing",
+        "Specs",
+        "Prioritize",
+        "Story",
+    )
 
 
 def test_missing_settings_file_fails_naming_the_file(workspace_dir: Path):

@@ -20,17 +20,17 @@ import yaml
 from bench.core.fields import FieldReader
 from bench.core.kinds import Visibility
 from bench.core.rubric import Rubric, parse_criteria
+from bench.core.settings import SETTINGS_FILE
 
 TASK_FILE = "task.md"
 GOLD_FILE = "gold.md"
 RUBRIC_FILE = "rubric.yaml"
 
-# Tracks in catalog order: Task T<n>.* belongs to TRACKS[n - 1].
-TRACKS = ("Framing", "Specs", "Prioritize", "Story")
 TASK_FIELDS = ("id", "track", "trap", "version", "manual_time_minutes")
 
-# T<track>.<n>, optionally suffixed, such as T1.1-example for a synthetic twin.
-_TASK_ID = re.compile(r"^T(?P<track>[1-4])\.[1-9][0-9]*(-[a-z0-9]+)*$")
+# T<track number>.<n>, optionally suffixed, such as T1.1-example for a synthetic twin.
+# The numbers are catalog naming only: a Task's Track is what its task.md declares.
+_TASK_ID = re.compile(r"^T[1-9][0-9]*\.[1-9][0-9]*(-[a-z0-9]+)*$")
 
 
 @dataclass(frozen=True)
@@ -58,7 +58,10 @@ PRIVATE_TASK_FOLDER = "tasks"
 
 
 def load_tasks(
-    workspace_root: Path, private_roots: tuple[Path, ...], shared: Rubric
+    workspace_root: Path,
+    private_roots: tuple[Path, ...],
+    shared: Rubric,
+    tracks: tuple[str, ...],
 ) -> tuple[Task, ...]:
     """Public Tasks from the repo, then Private Tasks from each private root."""
     sources = [(workspace_root, name, Visibility.PUBLIC) for name in PUBLIC_TASK_FOLDERS]
@@ -66,7 +69,7 @@ def load_tasks(
     tasks: list[Task] = []
     for root, name, visibility in sources:
         for folder in sorted(p for p in (root / name).glob("*") if p.is_dir()):
-            task = load_task(workspace_root, root, folder, visibility, shared)
+            task = load_task(workspace_root, root, folder, visibility, shared, tracks)
             for other in tasks:
                 if other.id == task.id:
                     raise FieldReader(_display(workspace_root, folder / TASK_FILE)).fail(
@@ -77,7 +80,12 @@ def load_tasks(
 
 
 def load_task(
-    workspace_root: Path, root: Path, folder: Path, visibility: Visibility, shared: Rubric
+    workspace_root: Path,
+    root: Path,
+    folder: Path,
+    visibility: Visibility,
+    shared: Rubric,
+    tracks: tuple[str, ...],
 ) -> Task:
     display = _display(workspace_root, folder)
     f = FieldReader(f"{display}/{TASK_FILE}")
@@ -86,14 +94,14 @@ def load_task(
         if key not in TASK_FIELDS:
             raise f.fail(str(key), f"unknown, expected one of {', '.join(TASK_FIELDS)}")
     task_id = f.text(meta.get("id"), "id")
-    match = _TASK_ID.match(task_id)
-    if not match:
+    if not _TASK_ID.match(task_id):
         raise f.fail("id", f"must look like T<track>.<n>, such as T1.2, got {task_id!r}")
     track = f.text(meta.get("track"), "track")
-    if track not in TRACKS:
-        raise f.fail("track", f"must be one of {', '.join(TRACKS)}, got {track!r}")
-    if TRACKS.index(track) + 1 != int(match["track"]):
-        raise f.fail("track", f"Task {task_id} belongs to Track {TRACKS[int(match['track']) - 1]}")
+    if track not in tracks:
+        raise f.fail(
+            "track",
+            f"must be a Track in {SETTINGS_FILE} ({', '.join(tracks)}), got {track!r}",
+        )
     version = meta.get("version")
     if isinstance(version, bool) or not isinstance(version, int) or version < 1:
         raise f.fail("version", f"must be a whole number of at least 1, got {version!r}")

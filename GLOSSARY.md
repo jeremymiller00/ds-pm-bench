@@ -7,11 +7,11 @@ A repeatable benchmark that answers one question: should a new AI tool or model 
 ### What is tested
 
 **Track**:
-One of four jobs-to-be-done the suite covers (Framing, Specs, Prioritize, Story), each holding three Tasks.
+A job-to-be-done the suite covers, each holding Tasks. The Tracks are defined in config (`tracks` in `config/settings.yaml`; by default Framing, Specs, Prioritize, Story) and each Task declares its own.
 _Avoid_: Category, suite section
 
 **Task**:
-One unit of PM work with a public-safe input (synthetic or sanitized), a canonical prompt, a Gold Answer, a Rubric and one Trap. Identified as T<track>.<n>.
+One unit of PM work with a public-safe input (synthetic or sanitized), a canonical prompt, a Gold Answer, a Rubric and one Trap. Identified as T<track>.<n>; the number is catalog naming only, never where the Track comes from.
 _Avoid_: Test case, question, scenario
 
 **Public Task**:
