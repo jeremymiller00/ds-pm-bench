@@ -14,6 +14,7 @@ class TaskScore:
     task_id: str
     track: str
     dimensions: dict[str, float]
+    latency_only: bool  # no per-Task cost: Cost/latency is the latency score alone
 
 
 @dataclass(frozen=True)
@@ -35,6 +36,15 @@ def time_saved(result: TaskResult) -> float:
     return (manual_seconds - result.active_seconds) / manual_seconds
 
 
+def cost_latency(settings: Settings, result: TaskResult) -> float:
+    """Average of the cost and latency scores, or the latency score alone when cost is None."""
+    bands = settings.normalization
+    latency = band_score(bands["latency"], result.latency_seconds)
+    if result.cost_usd is None:
+        return latency
+    return (band_score(bands["cost"], result.cost_usd) + latency) / 2
+
+
 def score_task(settings: Settings, result: TaskResult) -> TaskScore:
     bands = settings.normalization
     return TaskScore(
@@ -43,7 +53,9 @@ def score_task(settings: Settings, result: TaskResult) -> TaskScore:
         dimensions={
             "edit_distance": band_score(bands["edit_distance"], result.edit_distance),
             "time_saved": band_score(bands["time_saved"], time_saved(result)),
+            "cost_latency": cost_latency(settings, result),
         },
+        latency_only=result.cost_usd is None,
     )
 
 
