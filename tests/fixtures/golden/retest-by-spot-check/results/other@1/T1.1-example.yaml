@@ -1,0 +1,16 @@
+# Challenger result.
+# Scores that would adopt (Quality 5, weighted 4.3 vs 3.8), but the Spot-check
+# of clarity at 3.5 in case.yaml (1.5 points from the Judge) forces a re-test first.
+raw: one two three four five
+final: one two three four six
+active_seconds: 600
+latency_seconds: 12
+cost_usd: 0.03
+criterion_scores:
+  correctness: 5
+  completeness: 5
+  clarity: 5
+  pm_judgment: 5
+  format_fit: 5
+  grounded_success_criteria: 5
+  capacity_shaped_output: 5

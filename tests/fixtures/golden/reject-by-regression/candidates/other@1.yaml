@@ -1,0 +1,16 @@
+# The challenger: gated, public-only Clearance.
+tool: Other
+version: other-1
+adapter: manual_assisted
+settings: {}
+env_vars: []
+baseline: false
+gate:
+  reviewer: J. Reviewer
+  date: 2026-11-01
+  retention: 30 days, no training
+  sso: true
+  enterprise_terms: true
+  connector_support: None needed
+  result: pass
+  clearance: public_only

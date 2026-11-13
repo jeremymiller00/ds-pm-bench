@@ -1,0 +1,16 @@
+# The Baseline: gated, public-only Clearance.
+tool: Claude
+version: claude-opus-5-5
+adapter: automated
+settings: {temperature: 0.2, max_tokens: 4000}
+env_vars: [ANTHROPIC_API_KEY]
+baseline: true
+gate:
+  reviewer: J. Reviewer
+  date: 2026-11-01
+  retention: 30 days, no training
+  sso: true
+  enterprise_terms: true
+  connector_support: None needed
+  result: pass
+  clearance: public_only

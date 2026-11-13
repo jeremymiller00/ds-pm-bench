@@ -1,0 +1,7 @@
+# Golden Verdict path: the challenger is below the Baseline but within the re-test margin.
+challenger: other@1
+verdict_args: []
+expected:
+  outcome: re-test
+  label: re-test (public-only Suite)
+  reason: "within the re-test margin of 0.2"

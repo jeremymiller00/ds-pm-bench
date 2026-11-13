@@ -1,0 +1,16 @@
+# The challenger: its Gate review failed, so it has no Clearance and can never be Run.
+tool: Other
+version: other-1
+adapter: manual_assisted
+settings: {}
+env_vars: []
+baseline: false
+gate:
+  reviewer: J. Reviewer
+  date: 2026-11-01
+  retention: Trains on inputs
+  sso: false
+  enterprise_terms: false
+  connector_support: None needed
+  result: fail
+  clearance: null

@@ -7,11 +7,11 @@ A repeatable benchmark that answers one question: should a new AI tool or model 
 ### What is tested
 
 **Track**:
-One of four jobs-to-be-done the suite covers (Framing, Specs, Prioritize, Story), each holding three Tasks.
+A job-to-be-done the suite covers, holding Tasks. Tracks are configurable; the defaults are Framing, Specs, Prioritize and Story, and each Task declares its own.
 _Avoid_: Category, suite section
 
 **Task**:
-One unit of PM work with a public-safe input (synthetic or sanitized), a canonical prompt, a Gold Answer, a Rubric and one Trap. Identified as T<track>.<n>.
+One unit of PM work with a public-safe input (synthetic or sanitized), a canonical prompt, a Gold Answer, a Rubric and one Trap. Identified as T<track>.<n>; the number is catalog naming only, never where the Track comes from.
 _Avoid_: Test case, question, scenario
 
 **Public Task**:
@@ -87,6 +87,10 @@ _Avoid_: Execution, session, benchmark
 
 **Output**:
 What a Candidate returned for a Task, kept as the raw version and the edited final.
+
+**Task Result**:
+The numbers recorded for one Task in a Run: Criterion scores, Edit Distance, active time, Manual Time, cost and latency.
+_Avoid_: Result (alone), outcome
 
 **Comparison**:
 A challenger Run paired with a Baseline Run from the same week, over the same Suite. The Verdict belongs to a Comparison, never to a single Run.

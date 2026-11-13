@@ -1,0 +1,17 @@
+# Challenger result.
+# Quality 3.4 vs the Baseline's 4 in Framing: 0.6 below, beyond the 0.5 Regression
+# margin -> reject (weighted 3.5 vs 3.8 would also be beyond the re-test margin,
+# but the Regression is checked first and named in the rationale).
+raw: one two three four five
+final: one two three four six
+active_seconds: 600
+latency_seconds: 12
+cost_usd: 0.03
+criterion_scores:
+  correctness: 3.4
+  completeness: 3.4
+  clarity: 3.4
+  pm_judgment: 3.4
+  format_fit: 3.4
+  grounded_success_criteria: 3.4
+  capacity_shaped_output: 3.4

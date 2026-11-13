@@ -1,0 +1,16 @@
+# Challenger result.
+# Quality 3.8 vs 4: weighted 3.7 vs 3.8, 0.1 below, inside the 0.2 re-test margin;
+# a 0.2 Track drop is within the 0.5 Regression margin -> re-test.
+raw: one two three four five
+final: one two three four six
+active_seconds: 600
+latency_seconds: 12
+cost_usd: 0.03
+criterion_scores:
+  correctness: 3.8
+  completeness: 3.8
+  clarity: 3.8
+  pm_judgment: 3.8
+  format_fit: 3.8
+  grounded_success_criteria: 3.8
+  capacity_shaped_output: 3.8

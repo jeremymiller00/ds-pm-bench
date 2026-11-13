@@ -1,0 +1,20 @@
+# Secrets (ADR-0005): API key values live here, never in config
+.env
+.env.*
+!.env.example
+
+# Python and tool caches
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+*.egg-info/
+build/
+dist/
+.coverage
+htmlcov/
+
+# OS / editor
+.DS_Store
