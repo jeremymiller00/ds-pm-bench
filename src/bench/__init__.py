@@ -4,8 +4,12 @@ from bench.core.errors import (
     ClearanceError,
     ConfigError,
     GateNotPassed,
+    RunExists,
+    RunIncomplete,
+    RunMismatch,
     TaskNotRunnable,
     UnknownCandidateError,
+    UnknownRunError,
     UnknownTaskError,
 )
 from bench.core.results import TaskResult
@@ -16,11 +20,15 @@ __all__ = [
     "ClearanceError",
     "ConfigError",
     "GateNotPassed",
+    "RunExists",
+    "RunIncomplete",
+    "RunMismatch",
     "RunScore",
     "TaskNotRunnable",
     "TaskResult",
     "TaskScore",
     "UnknownCandidateError",
+    "UnknownRunError",
     "UnknownTaskError",
     "Workspace",
 ]

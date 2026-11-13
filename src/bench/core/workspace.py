@@ -13,7 +13,7 @@ from bench.core.results import TaskResult
 from bench.core.rubric import Rubric, load_rubric
 from bench.core.candidates import Candidate, load_candidates
 from bench.core.errors import TaskNotRunnable, UnknownCandidateError, UnknownTaskError
-from bench.core.runs import Run, create_run, suite_for
+from bench.core.runs import Run, create_run, open_run, suite_for
 from bench.core.scoring import RunScore, score_run
 from bench.core.tasks import Task, load_tasks
 
@@ -76,6 +76,10 @@ class Workspace:
         candidate = self.candidate(candidate_id)
         suite = tuple(self.runnable_task(t.id) for t in suite_for(candidate, self.tasks))
         return create_run(self.root, candidate, suite, on or datetime.date.today(), self.tasks)
+
+    def resume_run(self, run_id: str) -> Run:
+        """Reopen a Run, such as one left half-finished; see Run.pending."""
+        return open_run(self.root, run_id, {c.id: c for c in self.candidates}, self.tasks)
 
     def score(self, results: Iterable[TaskResult]) -> RunScore:
         """Score a Run's per-Task result records with this Workspace's weights and bands."""

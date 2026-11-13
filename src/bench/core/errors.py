@@ -31,3 +31,19 @@ class GateNotPassed(Exception):
 
 class ClearanceError(Exception):
     """Private content refused to a Candidate or Judge without private Clearance (ADR-0006)."""
+
+
+class UnknownRunError(LookupError):
+    """No Run with the requested id under runs/."""
+
+
+class RunExists(Exception):
+    """A Run for this Candidate and date already exists; resume it instead."""
+
+
+class RunMismatch(Exception):
+    """A Run cannot resume: what it snapshotted (Candidate, Task versions) has changed."""
+
+
+class RunIncomplete(Exception):
+    """A Run cannot produce TaskResults until every Task has an Output and Criterion scores."""

@@ -18,7 +18,18 @@ from typing import Any
 import yaml
 
 from bench.core.candidates import Candidate
-from bench.core.errors import ClearanceError, GateNotPassed, UnknownTaskError
+from collections.abc import Mapping
+
+from bench.core.errors import (
+    ClearanceError,
+    GateNotPassed,
+    RunExists,
+    RunIncomplete,
+    RunMismatch,
+    UnknownRunError,
+    UnknownTaskError,
+)
+from bench.core.results import TaskResult
 from bench.core.tasks import Task
 
 RUNS_FOLDER = "runs"
@@ -86,6 +97,8 @@ class Run:
         latency_seconds is the time to first draft.
         """
         task = self.task(task_id)
+        if self._numbers(task.id) is not None:
+            raise ValueError(f"Run {self.id}: Task {task.id}'s Output is already recorded")
         record = OutputRecord(
             task_id=task.id,
             edit_distance=edit_distance(raw, final),
@@ -109,6 +122,65 @@ class Run:
         (self.folder / RESULTS_FOLDER).mkdir(exist_ok=True)
         _results_file(self, task.id).write_text(yaml.safe_dump(numbers, sort_keys=False))
         return record
+
+    def record_criterion_scores(self, task_id: str, scores: Mapping[str, float]) -> None:
+        """Save the Judge's 1-5 Criterion scores for a Task whose Output is recorded."""
+        task = self.task(task_id)
+        numbers = self._numbers(task.id)
+        if numbers is None:
+            raise ValueError(f"Run {self.id}: Task {task.id} has no Output to score yet")
+        expected = {c.id for c in task.rubric.criteria}
+        if set(scores) != expected:
+            missing = sorted(expected - set(scores))
+            extra = sorted(set(scores) - expected)
+            raise ValueError(
+                f"Task {task.id}: Criterion scores must match its Rubric; "
+                f"missing {missing}, unknown {extra}"
+            )
+        for cid, value in scores.items():
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                raise ValueError(f"Task {task.id}: {cid} must be a 1-5 number, got {value!r}")
+            if not 1 <= value <= 5:
+                raise ValueError(f"Task {task.id}: {cid} must be 1-5, got {value}")
+        numbers["criterion_scores"] = dict(scores)
+        _results_file(self, task.id).write_text(yaml.safe_dump(numbers, sort_keys=False))
+
+    @property
+    def pending(self) -> tuple[str, ...]:
+        """Task ids in the Suite whose Output is not recorded yet, in Suite order."""
+        return tuple(t.id for t in self.tasks if self._numbers(t.id) is None)
+
+    def task_results(self) -> tuple[TaskResult, ...]:
+        """One TaskResult per Task, for Workspace.score. Refuses an incomplete Run."""
+        missing = []
+        for task in self.tasks:
+            numbers = self._numbers(task.id)
+            if numbers is None:
+                missing.append(f"{task.id} has no Output")
+            elif "criterion_scores" not in numbers:
+                missing.append(f"{task.id} has no Criterion scores")
+        if missing:
+            raise RunIncomplete(f"Run {self.id} is incomplete: {'; '.join(missing)}")
+        results = []
+        for task in self.tasks:
+            n = self._numbers(task.id)
+            results.append(
+                TaskResult(
+                    task_id=task.id,
+                    track=task.track,
+                    criterion_scores=n["criterion_scores"],
+                    edit_distance=n["edit_distance"],
+                    active_seconds=n["active_seconds"],
+                    manual_minutes=task.manual_time_minutes,
+                    cost_usd=n["cost_usd"],
+                    latency_seconds=n["latency_seconds"],
+                )
+            )
+        return tuple(results)
+
+    def _numbers(self, task_id: str) -> dict[str, Any] | None:
+        path = _results_file(self, task_id)
+        return yaml.safe_load(path.read_text()) if path.is_file() else None
 
 
 @dataclass(frozen=True)
@@ -178,6 +250,8 @@ def create_run(
     for task in suite:
         check_clearance(candidate, task)
     rid = run_id(candidate, date)
+    if (workspace_root / RUNS_FOLDER / rid).exists():
+        raise RunExists(f"Run {rid} already exists; resume it instead")
     run = Run(
         id=rid,
         candidate=candidate,
@@ -211,3 +285,42 @@ def _snapshot(run: Run) -> dict[str, Any]:
         },
         "tasks": run.task_versions,
     }
+
+
+def open_run(
+    workspace_root: Path,
+    rid: str,
+    candidates: Mapping[str, Candidate],
+    workspace_tasks: tuple[Task, ...],
+) -> Run:
+    """Load a Run from its snapshot, refusing if anything it used has changed (ADR-0003)."""
+    folder = workspace_root / RUNS_FOLDER / rid
+    if not (folder / RUN_FILE).is_file():
+        raise UnknownRunError(f"no Run {rid!r} in {RUNS_FOLDER}/")
+    snapshot = yaml.safe_load((folder / RUN_FILE).read_text())
+    snapped = snapshot["candidate"]
+    candidate = candidates.get(snapped["id"])
+    if candidate is None or (candidate.version, candidate.settings) != (
+        snapped["version"],
+        snapped["settings"],
+    ):
+        raise RunMismatch(f"Run {rid}: Candidate {snapped['id']} is missing or has changed")
+    check_gate(candidate)
+    by_id = {t.id: t for t in workspace_tasks}
+    suite = []
+    for task_id, version in snapshot["tasks"].items():
+        task = by_id.get(task_id)
+        if task is None or task.version != version:
+            found = "missing" if task is None else f"now version {task.version}"
+            raise RunMismatch(f"Run {rid} used Task {task_id} version {version}, {found}")
+        check_clearance(candidate, task)
+        suite.append(task)
+    return Run(
+        id=rid,
+        candidate=candidate,
+        date=datetime.date.fromisoformat(snapshot["date"]),
+        suite=snapshot["suite"],
+        tasks=tuple(suite),
+        folder=folder,
+        workspace_tasks=workspace_tasks,
+    )

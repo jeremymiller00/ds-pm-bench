@@ -4,7 +4,15 @@ from pathlib import Path
 import pytest
 import yaml
 
-from bench import ClearanceError, GateNotPassed, Workspace
+from bench import (
+    ClearanceError,
+    GateNotPassed,
+    RunExists,
+    RunIncomplete,
+    RunMismatch,
+    TaskResult,
+    Workspace,
+)
 from test_workspace_candidates import candidate, write_candidate
 from test_workspace_tasks import configure_private_root, write_task
 
@@ -177,3 +185,121 @@ def test_a_private_tasks_content_goes_only_to_the_private_root(
     )
     assert "Acme" not in public_text
     assert "secret" not in public_text
+
+
+SCORES = {
+    "correctness": 4,
+    "completeness": 3,
+    "clarity": 5,
+    "pm_judgment": 4,
+    "format_fit": 4,
+    "names_the_decision": 2,
+}
+
+
+def record(run, task_id: str, *, cost_usd: float | None = 0.03) -> None:
+    run.record_output(
+        task_id,
+        raw="one two three four five",
+        final="one two three four six",
+        active_seconds=600,
+        latency_seconds=12,
+        cost_usd=cost_usd,
+    )
+    run.record_criterion_scores(task_id, SCORES)
+
+
+def test_a_completed_run_produces_task_results_the_workspace_can_score(ws_dir: Path):
+    ws = Workspace.open(ws_dir)
+    run = ws.start_run("claude@opus-5-5", on=DAY)
+    record(run, "T1.1")
+    record(run, "T2.1", cost_usd=None)
+
+    results = run.task_results()
+
+    assert results[0] == TaskResult(
+        task_id="T1.1",
+        track="Framing",
+        criterion_scores=SCORES,
+        edit_distance=0.2,
+        active_seconds=600,
+        manual_minutes=45,
+        cost_usd=0.03,
+        latency_seconds=12,
+    )
+    assert [(r.task_id, r.track, r.cost_usd) for r in results[1:]] == [("T2.1", "Specs", None)]
+    assert ws.score(results).latency_only_tasks == ("T2.1",)
+
+
+def test_task_results_refuse_an_incomplete_run(ws_dir: Path):
+    run = Workspace.open(ws_dir).start_run("claude@opus-5-5", on=DAY)
+    run.record_output(
+        "T1.1", raw="a", final="a", active_seconds=1, latency_seconds=1, cost_usd=None
+    )
+
+    with pytest.raises(RunIncomplete) as err:
+        run.task_results()
+
+    assert "T1.1 has no Criterion scores" in str(err.value)
+    assert "T2.1 has no Output" in str(err.value)
+
+
+def test_criterion_scores_must_cover_exactly_the_tasks_rubric(ws_dir: Path):
+    run = Workspace.open(ws_dir).start_run("claude@opus-5-5", on=DAY)
+    with pytest.raises(ValueError, match="no Output"):
+        run.record_criterion_scores("T1.1", SCORES)
+    run.record_output(
+        "T1.1", raw="a", final="a", active_seconds=1, latency_seconds=1, cost_usd=None
+    )
+
+    without = {k: v for k, v in SCORES.items() if k != "names_the_decision"}
+    with pytest.raises(ValueError, match="names_the_decision"):
+        run.record_criterion_scores("T1.1", without)
+    with pytest.raises(ValueError, match="1-5"):
+        run.record_criterion_scores("T1.1", {**SCORES, "clarity": 6})
+
+
+def test_a_half_finished_run_resumes_where_it_left_off(ws_dir: Path):
+    run = Workspace.open(ws_dir).start_run("claude@opus-5-5", on=DAY)
+    record(run, "T1.1")
+    assert run.pending == ("T2.1",)
+
+    resumed = Workspace.open(ws_dir).resume_run(run.id)
+
+    assert resumed.pending == ("T2.1",)
+    assert (resumed.date, resumed.candidate_id, resumed.task_versions) == (
+        DAY,
+        "claude@opus-5-5",
+        {"T1.1": 2, "T2.1": 1},
+    )
+    record(resumed, "T2.1")
+    assert [r.task_id for r in resumed.task_results()] == ["T1.1", "T2.1"]
+
+
+def test_starting_a_run_that_exists_says_to_resume_it(ws_dir: Path):
+    Workspace.open(ws_dir).start_run("claude@opus-5-5", on=DAY)
+
+    with pytest.raises(RunExists, match="resume"):
+        Workspace.open(ws_dir).start_run("claude@opus-5-5", on=DAY)
+
+
+def test_a_run_cannot_resume_once_a_task_it_used_has_a_new_version(ws_dir: Path):
+    run = Workspace.open(ws_dir).start_run("claude@opus-5-5", on=DAY)
+    task_md = ws_dir / "tasks" / "T1.1" / "task.md"
+    task_md.write_text(task_md.read_text().replace("version: 2", "version: 3"))
+
+    with pytest.raises(RunMismatch, match="T1.1"):
+        Workspace.open(ws_dir).resume_run(run.id)
+
+
+def test_resuming_an_unknown_run_fails(ws_dir: Path):
+    with pytest.raises(LookupError, match="2026-01-01-nope@1"):
+        Workspace.open(ws_dir).resume_run("2026-01-01-nope@1")
+
+
+def test_a_tasks_output_is_recorded_once(ws_dir: Path):
+    run = Workspace.open(ws_dir).start_run("claude@opus-5-5", on=DAY)
+    record(run, "T1.1")
+
+    with pytest.raises(ValueError, match="already recorded"):
+        record(run, "T1.1")
