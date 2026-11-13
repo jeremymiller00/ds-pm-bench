@@ -1,0 +1,16 @@
+# Challenger result.
+# Same Quality as the Baseline (4), but 30 of 30 min active: no time saved -> 1.
+# Weighted 3.2 vs 3.8: 0.6 below, beyond the 0.2 re-test margin -> reject.
+raw: one two three four five
+final: one two three four six
+active_seconds: 1800
+latency_seconds: 12
+cost_usd: 0.03
+criterion_scores:
+  correctness: 4
+  completeness: 4
+  clarity: 4
+  pm_judgment: 4
+  format_fit: 4
+  grounded_success_criteria: 4
+  capacity_shaped_output: 4

@@ -4,3 +4,4 @@ verdict_args: []
 expected:
   outcome: adopt
   label: adopt (public-only Suite, not a full adopt)
+  reason: "at least the Baseline's"

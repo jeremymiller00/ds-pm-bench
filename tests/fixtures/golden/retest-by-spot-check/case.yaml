@@ -1,0 +1,7 @@
+# Golden Verdict path: a Spot-check found the Judge and human more than 1 point apart.
+challenger: other@1
+verdict_args: ["--spot-check-disagreement", "1.5"]
+expected:
+  outcome: re-test
+  label: re-test (public-only Suite)
+  reason: "Spot-check: Judge and human differ by 1.5 points"

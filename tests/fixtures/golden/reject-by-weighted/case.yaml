@@ -1,0 +1,7 @@
+# Golden Verdict path: the challenger saves no time, so its weighted score is too far below.
+challenger: other@1
+verdict_args: []
+expected:
+  outcome: reject
+  label: reject (public-only Suite)
+  reason: "more than the re-test margin of 0.2 below"

@@ -1,0 +1,7 @@
+# Golden Verdict path: a Track drops beyond the Regression margin.
+challenger: other@1
+verdict_args: []
+expected:
+  outcome: reject
+  label: reject (public-only Suite)
+  reason: "Regression beyond the margin of 0.5 in Track quality: Framing"

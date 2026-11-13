@@ -39,7 +39,16 @@ def record_run(ws: Path, case: str, candidate_id: str) -> str:
     return f"{DAY}-{candidate_id}"
 
 
-@pytest.mark.parametrize("case", ["adopt-public-only"])
+COMPARISON_CASES = [
+    "adopt-public-only",
+    "reject-by-weighted",
+    "reject-by-regression",
+    "retest-by-margin",
+    "retest-by-spot-check",
+]
+
+
+@pytest.mark.parametrize("case", COMPARISON_CASES)
 def test_bench_verdict_on_golden_fixture_runs_gives_the_expected_verdict(
     case: str, tmp_path: Path, capsys
 ):
@@ -53,3 +62,4 @@ def test_bench_verdict_on_golden_fixture_runs_gives_the_expected_verdict(
 
     out = capsys.readouterr().out
     assert out.splitlines()[0] == f"Verdict: {spec['expected']['label']}"
+    assert spec["expected"]["reason"] in out
