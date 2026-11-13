@@ -1,0 +1,8 @@
+# Benchmark settings. Edit in the TUI or by hand; validated on every load.
+
+# Dimension weights (percent). Must sum to 100.
+weights:
+  quality: 50
+  edit_distance: 20
+  time_saved: 20
+  cost_latency: 10
