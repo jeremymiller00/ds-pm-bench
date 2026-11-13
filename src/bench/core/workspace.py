@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import datetime
 from collections.abc import Iterable
+from typing import Any
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -12,6 +13,7 @@ from bench.core.prices import PriceTable, load_prices
 from bench.core.results import TaskResult
 from bench.core.rubric import Rubric, load_rubric
 from bench.core.candidates import Candidate, load_candidates
+from bench.core.decisions import log_verdict, read_log
 from bench.core.errors import TaskNotRunnable, UnknownCandidateError, UnknownTaskError
 from bench.core.runs import Run, create_run, open_run, suite_for
 from bench.core.scoring import RunScore, score_run
@@ -115,3 +117,17 @@ class Workspace:
         if baseline is None:  # unreachable: candidate() found at least one Candidate
             raise UnknownCandidateError("no Baseline in candidates/")
         return gate_verdict(self.candidate(candidate_id), baseline)
+
+    def log_verdict(
+        self,
+        verdict: Verdict,
+        *,
+        on: datetime.date | None = None,
+        judge_setup_hash: str | None = None,
+    ) -> Path:
+        """Append a Verdict to the Decision Log; returns the new entry's file."""
+        return log_verdict(self.root, verdict, on or datetime.date.today(), judge_setup_hash)
+
+    def decision_log(self) -> tuple[dict[str, Any], ...]:
+        """Every Decision Log entry, oldest first, as written to decisions/."""
+        return read_log(self.root)

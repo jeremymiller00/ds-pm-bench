@@ -2,6 +2,7 @@ import datetime
 from pathlib import Path
 
 import pytest
+import yaml
 
 from bench import SuiteMismatch, Workspace
 from test_workspace_candidates import write_candidate
@@ -212,3 +213,77 @@ def test_a_candidate_whose_gate_has_not_passed_is_rejected_without_runs(ws_dir: 
 def test_a_gate_verdict_is_refused_for_a_candidate_whose_gate_passed(ws_dir: Path):
     with pytest.raises(ValueError, match="passed"):
         Workspace.open(ws_dir).gate_verdict(CHALLENGER)
+
+
+def test_a_comparisons_verdict_is_logged_with_its_rationale(private_ws_dir: Path):
+    ws = Workspace.open(private_ws_dir)
+    verdict = compare(private_ws_dir).verdict
+
+    path = ws.log_verdict(verdict, on=DAY)
+
+    assert path == private_ws_dir / "decisions" / "0001-2026-11-13-other@1.yaml"
+    entry = yaml.safe_load(path.read_text())
+    assert entry == {
+        "date": "2026-11-13",
+        "candidate": {"id": "other@1", "version": "other-1"},
+        "baseline": {"id": "claude@opus-5-5", "version": "claude-opus-5-5"},
+        "verdict": "adopt",
+        "label": "adopt",
+        "full_adopt": True,
+        "suite": "public_and_private",
+        "private_tasks": 1,
+        "judge_setup_hash": None,
+        "rationale": list(verdict.rationale),
+        "regressions": [],
+        "warnings": [],
+        "runs": {
+            "challenger": "2026-11-13-other@1",
+            "baseline": "2026-11-13-claude@opus-5-5",
+        },
+    }
+    assert ws.decision_log() == (entry,)
+
+
+def test_a_public_only_entry_keeps_its_label_and_judge_setup_hash(ws_dir: Path):
+    ws = Workspace.open(ws_dir)
+    verdict = compare(ws_dir, quality={"T1.1": 5, "T2.1": 3.4}).verdict
+
+    entry = yaml.safe_load(ws.log_verdict(verdict, on=DAY, judge_setup_hash="abc123").read_text())
+
+    assert (entry["verdict"], entry["label"], entry["full_adopt"]) == (
+        "reject",
+        "reject (public-only Suite)",
+        False,
+    )
+    assert (entry["private_tasks"], entry["judge_setup_hash"]) == (0, "abc123")
+    assert entry["regressions"] == ["Specs"]
+
+
+def test_a_gate_failure_verdict_is_logged_without_runs(ws_dir: Path):
+    data = cleared("public_only", version="bad-1")
+    data["gate"]["result"] = "fail"
+    write_candidate(ws_dir, "bad@1", data)
+    ws = Workspace.open(ws_dir)
+
+    entry = yaml.safe_load(ws.log_verdict(ws.gate_verdict("bad@1"), on=DAY).read_text())
+
+    assert (entry["verdict"], entry["suite"], entry["private_tasks"]) == ("reject", None, 0)
+    assert entry["runs"] == {"challenger": None, "baseline": None}
+
+
+def test_the_decision_log_is_append_only(ws_dir: Path):
+    ws = Workspace.open(ws_dir)
+    baseline_run = complete_run(ws, BASELINE)
+    challenger_run = complete_run(ws, CHALLENGER)
+    first = ws.log_verdict(ws.compare(challenger_run, baseline_run).verdict, on=DAY)
+    first_text = first.read_text()
+
+    retest = ws.compare(challenger_run, baseline_run, spot_check_disagreement=2)
+    second = ws.log_verdict(retest.verdict, on=DAY)
+
+    assert first.read_text() == first_text
+    assert second == ws_dir / "decisions" / "0002-2026-11-13-other@1.yaml"
+    assert [e["verdict"] for e in Workspace.open(ws_dir).decision_log()] == [
+        "adopt",
+        "re-test",
+    ]
