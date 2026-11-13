@@ -74,7 +74,15 @@ class Candidate:
 
 def load_candidates(root: Path) -> tuple[Candidate, ...]:
     folder = root / CANDIDATES_FOLDER
-    return tuple(_load(root, path) for path in sorted(folder.glob("*.yaml")))
+    candidates = tuple(_load(root, path) for path in sorted(folder.glob("*.yaml")))
+    marked = [c.id for c in candidates if c.baseline]
+    if candidates and len(marked) != 1:
+        raise FieldReader(CANDIDATES_FOLDER).fail(
+            "baseline",
+            f"exactly one Candidate must be the Baseline, found {len(marked)}"
+            + (f" ({', '.join(marked)})" if marked else ""),
+        )
+    return candidates
 
 
 def _load(root: Path, path: Path) -> Candidate:

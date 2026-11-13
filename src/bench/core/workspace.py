@@ -55,6 +55,11 @@ class Workspace:
             )
         return task
 
+    @property
+    def baseline(self) -> Candidate | None:
+        """The Candidate marked as Baseline; None only while there are no Candidates."""
+        return next((c for c in self.candidates if c.baseline), None)
+
     def candidate(self, candidate_id: str) -> Candidate:
         for candidate in self.candidates:
             if candidate.id == candidate_id:

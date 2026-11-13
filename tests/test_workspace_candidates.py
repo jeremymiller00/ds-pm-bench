@@ -152,3 +152,28 @@ def test_candidate_file_must_be_named_tool_at_version(workspace_dir: Path):
         Workspace.open(workspace_dir)
 
     assert (err.value.file, err.value.field) == ("candidates/claude.yaml", "(file)")
+
+
+def test_no_candidates_means_no_baseline_yet(workspace_dir: Path):
+    ws = Workspace.open(workspace_dir)
+
+    assert (ws.candidates, ws.baseline) == ((), None)
+
+
+def test_the_one_candidate_marked_baseline_is_the_baseline(workspace_dir: Path):
+    write_candidate(workspace_dir, "claude@opus-5-5", candidate(baseline=True))
+    write_candidate(workspace_dir, "other@1", candidate(tool="Other", version="1"))
+
+    assert Workspace.open(workspace_dir).baseline.id == "claude@opus-5-5"
+
+
+@pytest.mark.parametrize("marked", [[], ["a@1", "b@1"]], ids=["none", "two"])
+def test_candidates_need_exactly_one_baseline(workspace_dir: Path, marked: list[str]):
+    for cid in ("a@1", "b@1"):
+        write_candidate(workspace_dir, cid, candidate(baseline=cid in marked))
+
+    with pytest.raises(ConfigError) as err:
+        Workspace.open(workspace_dir)
+
+    assert (err.value.file, err.value.field) == ("candidates", "baseline")
+    assert "exactly one" in err.value.message
