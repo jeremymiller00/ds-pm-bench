@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-from textual.widgets import Static, Tree
+from textual.widgets import Static, TabbedContent, Tabs, Tree
 
 from bench import Workspace
 from bench.tui.app import BenchApp
@@ -109,3 +109,23 @@ async def test_highlighting_a_task_shows_its_details_read_only(workspace_dir: Pa
     assert "Frame this business problem as a data problem." in text
     assert "names_the_decision" in text
     assert not app.query("Input, TextArea")  # nothing to edit here
+
+
+async def test_shell_opens_on_tasks_with_the_later_sections_as_placeholders(
+    workspace_dir: Path,
+):
+    app = BenchApp(Workspace.open(workspace_dir))
+    async with app.run_test() as pilot:
+        tabs = app.query_one(Tabs)
+        labels = [str(tab.label) for tab in tabs.query("Tab")]
+        assert labels == [
+            "Tasks", "Runs", "Calibration", "Comparisons", "Decision Log", "Settings"
+        ]
+        sections = app.query_one(TabbedContent)
+        assert sections.active == "tasks"
+
+        await pilot.click("#--content-tab-runs")
+        await pilot.pause()
+        assert sections.active == "runs"
+        placeholder = sections.query_one("#runs Static", Static)
+        assert "not built yet" in str(placeholder.content)
