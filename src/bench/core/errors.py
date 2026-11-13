@@ -23,3 +23,11 @@ class TaskNotRunnable(Exception):
 
 class UnknownCandidateError(LookupError):
     """No Candidate with the requested id."""
+
+
+class GateNotPassed(Exception):
+    """A Candidate without a passing Gate cannot be Run (or adopted)."""
+
+
+class ClearanceError(Exception):
+    """Private content refused to a Candidate or Judge without private Clearance (ADR-0006)."""
