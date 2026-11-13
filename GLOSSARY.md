@@ -88,6 +88,10 @@ _Avoid_: Execution, session, benchmark
 **Output**:
 What a Candidate returned for a Task, kept as the raw version and the edited final.
 
+**Task Result**:
+The numbers recorded for one Task in a Run: Criterion scores, Edit Distance, active time, Manual Time, cost and latency.
+_Avoid_: Result (alone), outcome
+
 **Comparison**:
 A challenger Run paired with a Baseline Run from the same week, over the same Suite. The Verdict belongs to a Comparison, never to a single Run.
 _Avoid_: Evaluation, head-to-head
