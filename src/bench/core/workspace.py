@@ -16,6 +16,7 @@ from bench.core.errors import TaskNotRunnable, UnknownCandidateError, UnknownTas
 from bench.core.runs import Run, create_run, open_run, suite_for
 from bench.core.scoring import RunScore, score_run
 from bench.core.tasks import Task, load_tasks
+from bench.core.verdicts import Comparison, compare
 
 
 @dataclass(frozen=True)
@@ -84,3 +85,15 @@ class Workspace:
     def score(self, results: Iterable[TaskResult]) -> RunScore:
         """Score a Run's per-Task result records with this Workspace's weights and bands."""
         return score_run(self.settings, results)
+
+    def compare(self, challenger_run_id: str, baseline_run_id: str) -> Comparison:
+        """Compare a challenger Run with a Baseline Run and reach a Verdict."""
+        challenger = self.resume_run(challenger_run_id)
+        baseline = self.resume_run(baseline_run_id)
+        return compare(
+            self.settings,
+            challenger,
+            self.score(challenger.task_results()),
+            baseline,
+            self.score(baseline.task_results()),
+        )
