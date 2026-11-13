@@ -1,6 +1,7 @@
 from pathlib import Path
 
 import pytest
+import yaml
 
 from bench import TaskResult, Workspace
 from test_workspace_config import set_setting
@@ -151,3 +152,44 @@ def test_track_quality_is_the_average_of_its_tasks_quality(workspace_dir: Path):
     )
 
     assert score.track_quality == pytest.approx({"Framing": 3.5, "Specs": 4.5})
+
+
+GOLDEN_RUN = Path(__file__).parent / "fixtures" / "scoring" / "golden_run.yaml"
+
+
+def test_golden_run_scores_match_hand_computed_values(workspace_dir: Path):
+    golden = yaml.safe_load(GOLDEN_RUN.read_text())
+    expected = golden["expected"]
+    ws = Workspace.open(workspace_dir)
+
+    score = ws.score([TaskResult(**r) for r in golden["results"]])
+
+    for task in score.tasks:
+        want = expected["tasks"][task.task_id]
+        assert task.dimensions == pytest.approx(
+            {d: want[d] for d in ("quality", "edit_distance", "time_saved", "cost_latency")}
+        )
+        assert task.weighted == pytest.approx(want["weighted"])
+        assert task.latency_only is want["latency_only"]
+    assert score.dimensions == pytest.approx(expected["dimensions"])
+    assert score.weighted == pytest.approx(expected["weighted"])
+    assert score.track_quality == pytest.approx(expected["track_quality"])
+    assert score.latency_only_tasks == tuple(expected["latency_only_tasks"])
+
+
+def test_null_cost_re_normalization_is_reported(workspace_dir: Path):
+    ws = Workspace.open(workspace_dir)
+
+    score = ws.score(
+        [result(task_id="T1.1", cost_usd=0.02), result(task_id="T1.2", cost_usd=None)]
+    )
+
+    assert score.latency_only_tasks == ("T1.2",)
+    assert any("T1.2" in note and "latency only" in note for note in score.notes)
+
+
+def test_run_with_costs_reports_no_re_normalization(workspace_dir: Path):
+    score = Workspace.open(workspace_dir).score([result(cost_usd=0.02)])
+
+    assert score.latency_only_tasks == ()
+    assert score.notes == ()

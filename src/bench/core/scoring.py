@@ -22,7 +22,11 @@ class TaskScore:
 @dataclass(frozen=True)
 class RunScore:
     tasks: tuple[TaskScore, ...]
+    dimensions: dict[str, float]  # Dimension -> average 1-5 score over the Run's Tasks
+    weighted: float  # weighted total of the Run's Dimension scores (= mean Task weighted)
     track_quality: dict[str, float]  # Track -> average Quality over its Tasks
+    latency_only_tasks: tuple[str, ...]  # Task ids whose Cost/latency is latency only
+    notes: tuple[str, ...]  # human-readable scoring notes for the scorecard
 
 
 def band_score(band: Band, value: float) -> int:
@@ -73,8 +77,20 @@ def score_task(settings: Settings, result: TaskResult) -> TaskScore:
 def score_run(settings: Settings, results: Iterable[TaskResult]) -> RunScore:
     tasks = tuple(score_task(settings, r) for r in results)
     tracks = dict.fromkeys(t.track for t in tasks)
+    dimensions = {d: mean(t.dimensions[d] for t in tasks) for d in DIMENSIONS}
+    latency_only = tuple(t.task_id for t in tasks if t.latency_only)
+    notes = ()
+    if latency_only:
+        notes = (
+            f"Cost/latency scored on latency only for {', '.join(latency_only)}: "
+            "no per-Task cost, so the cost share of Cost/latency moves to latency.",
+        )
     return RunScore(
         tasks=tasks,
+        dimensions=dimensions,
+        weighted=weighted(settings, dimensions),
+        latency_only_tasks=latency_only,
+        notes=notes,
         track_quality={
             track: mean(t.dimensions["quality"] for t in tasks if t.track == track)
             for track in tracks
