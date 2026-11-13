@@ -15,7 +15,7 @@ from bench.core.lookup import find_by_id
 from bench.core.prices import PriceTable, load_prices
 from bench.core.results import TaskResult
 from bench.core.rubric import Rubric, load_rubric
-from bench.core.runs import Run, create_run, open_run, suite_for
+from bench.core.runs import Run, check_clearance, create_run, open_run, suite_for
 from bench.core.scoring import RunScore, score_run
 from bench.core.settings import Settings, load_settings
 from bench.core.tasks import Task, load_tasks
@@ -79,7 +79,16 @@ class Workspace:
         """Start a Run of the Candidate over every Task its Clearance allows."""
         candidate = self.candidate(candidate_id)
         suite = tuple(self.runnable_task(t.id) for t in suite_for(candidate, self.tasks))
-        return create_run(self.root, candidate, suite, on or datetime.date.today(), self.tasks)
+        return create_run(self.root, candidate, suite, on or datetime.date.today())
+
+    def task_input(self, run: Run, task_id: str) -> str:
+        """The Canonical Prompt and input of a Task in the Run's Suite.
+
+        A Task the Workspace has but the Candidate is not cleared for raises
+        ClearanceError before any of its content is read; one it lacks is unknown.
+        """
+        check_clearance(run.candidate, self.task(task_id))
+        return run.task_input(task_id)
 
     def resume_run(self, run_id: str) -> Run:
         """Reopen a Run, such as one left half-finished; see Run.pending."""

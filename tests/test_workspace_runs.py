@@ -86,26 +86,28 @@ def test_a_privately_cleared_candidate_gets_private_tasks_too(
 
     assert run.suite == "public_and_private"
     assert run.task_versions == {"T1.1": 2, "T2.1": 1, "T3.1": 1}
-    assert "Real Q3 roadmap" in run.task_input("T3.1")
+    assert "Real Q3 roadmap" in Workspace.open(ws_dir).task_input(run, "T3.1")
 
 
 def test_a_private_tasks_input_is_refused_without_private_clearance(
     ws_dir: Path, private_root: Path
 ):
-    run = Workspace.open(ws_dir).start_run("claude@opus-5-5", on=DAY)
+    ws = Workspace.open(ws_dir)
+    run = ws.start_run("claude@opus-5-5", on=DAY)
     (private_root / "tasks" / "T3.1" / "input.md").chmod(0)  # any read would raise
 
     try:
         with pytest.raises(ClearanceError, match="T3.1"):
-            run.task_input("T3.1")
+            ws.task_input(run, "T3.1")
     finally:
         (private_root / "tasks" / "T3.1" / "input.md").chmod(0o644)
 
 
 def test_task_input_is_the_canonical_prompt_then_the_input(ws_dir: Path):
-    run = Workspace.open(ws_dir).start_run("claude@opus-5-5", on=DAY)
+    ws = Workspace.open(ws_dir)
+    run = ws.start_run("claude@opus-5-5", on=DAY)
 
-    assert run.task_input("T1.1") == (
+    assert ws.task_input(run, "T1.1") == (
         "Frame this business problem as a data problem.\n\n"
         "Churn rose 4% last quarter in the SMB segment."
     )
@@ -290,6 +292,14 @@ def test_a_run_cannot_resume_once_a_task_it_used_has_a_new_version(ws_dir: Path)
 
     with pytest.raises(RunMismatch, match="T1.1"):
         Workspace.open(ws_dir).resume_run(run.id)
+
+
+def test_task_input_for_a_task_the_workspace_does_not_have_is_unknown(ws_dir: Path):
+    ws = Workspace.open(ws_dir)
+    run = ws.start_run("claude@opus-5-5", on=DAY)
+
+    with pytest.raises(LookupError, match="T9.9"):
+        ws.task_input(run, "T9.9")
 
 
 def test_resuming_an_unknown_run_fails(ws_dir: Path):

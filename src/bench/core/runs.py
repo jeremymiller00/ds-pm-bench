@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import datetime
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -47,9 +47,6 @@ class Run:
     suite: Suite
     tasks: tuple[Task, ...]  # the Suite, at the versions this Run uses
     folder: Path  # runs/<id>/ in the public repo
-    # Every Task the Workspace loaded, so a request for one outside the Suite is
-    # refused for the right reason (Clearance) rather than as unknown.
-    workspace_tasks: tuple[Task, ...] = field(default=(), repr=False)
 
     @property
     def candidate_id(self) -> str:
@@ -66,11 +63,13 @@ class Run:
         return task
 
     def task_input(self, task_id: str) -> str:
-        """What is sent to (or shown for) the Candidate: the Canonical Prompt, then the input."""
-        known = find_by_id(self.workspace_tasks, task_id)
-        if known is not None:
-            check_clearance(self.candidate, known)  # before any content is read
+        """What is sent to (or shown for) the Candidate: the Canonical Prompt, then the input.
+
+        Only for a Task in the Suite; Workspace.task_input tells a Task the Candidate is
+        not cleared for apart from one that does not exist.
+        """
         task = self.task(task_id)
+        check_clearance(self.candidate, task)  # before any content is read
         return f"{task.canonical_prompt}\n\n{task.input_path.read_text().strip()}"
 
     def content_folder(self, task: Task) -> Path:
@@ -243,7 +242,6 @@ def create_run(
     candidate: Candidate,
     suite: tuple[Task, ...],
     date: datetime.date,
-    workspace_tasks: tuple[Task, ...],
 ) -> Run:
     check_gate(candidate)
     for task in suite:
@@ -262,7 +260,6 @@ def create_run(
         ),
         tasks=suite,
         folder=workspace_root / RUNS_FOLDER / run_id,
-        workspace_tasks=workspace_tasks,
     )
     run.folder.mkdir(parents=True)
     (run.folder / RUN_FILE).write_text(yaml.safe_dump(_snapshot(run), sort_keys=False))
@@ -321,5 +318,4 @@ def open_run(
         suite=Suite(snapshot["suite"]),
         tasks=tuple(suite),
         folder=folder,
-        workspace_tasks=workspace_tasks,
     )
