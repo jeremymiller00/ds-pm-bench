@@ -1,0 +1,6 @@
+# Golden Verdict path: the challenger's Gate failed; the Verdict needs no Runs.
+challenger: other@1
+expected:
+  outcome: reject
+  label: reject
+  reason: "Gate: its Gate failed, so other@1 cannot be Run or adopted"

@@ -63,3 +63,26 @@ def test_bench_verdict_on_golden_fixture_runs_gives_the_expected_verdict(
     out = capsys.readouterr().out
     assert out.splitlines()[0] == f"Verdict: {spec['expected']['label']}"
     assert spec["expected"]["reason"] in out
+
+
+def test_bench_verdict_rejects_a_candidate_whose_gate_failed_without_runs(
+    tmp_path: Path, capsys
+):
+    spec = yaml.safe_load((GOLDEN / "reject-by-gate" / "case.yaml").read_text())
+    ws = golden_workspace("reject-by-gate", tmp_path)
+
+    assert bench(ws, "verdict", "--gate", spec["challenger"]) == 0
+
+    out = capsys.readouterr().out
+    assert out.splitlines()[0] == f"Verdict: {spec['expected']['label']}"
+    assert spec["expected"]["reason"] in out
+
+
+def test_bench_run_refuses_a_candidate_whose_gate_failed(tmp_path: Path, capsys):
+    ws = golden_workspace("reject-by-gate", tmp_path)
+    results = GOLDEN / "adopt-public-only" / "results" / "other@1"
+
+    assert bench(ws, "run", "other@1", "--results", str(results), "--on", DAY) == 1
+
+    assert "GateNotPassed" in capsys.readouterr().err
+    assert not (ws / "runs").exists()
