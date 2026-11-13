@@ -12,8 +12,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-import yaml
-
 from bench.core.fields import FieldReader
 
 CANDIDATES_FOLDER = "candidates"

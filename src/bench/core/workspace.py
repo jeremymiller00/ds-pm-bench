@@ -4,19 +4,19 @@ from __future__ import annotations
 
 import datetime
 from collections.abc import Iterable
-from typing import Any
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
-from bench.core.settings import Settings, load_settings
-from bench.core.prices import PriceTable, load_prices
-from bench.core.results import TaskResult
-from bench.core.rubric import Rubric, load_rubric
 from bench.core.candidates import Candidate, load_candidates
 from bench.core.decisions import log_verdict, read_log
 from bench.core.errors import TaskNotRunnable, UnknownCandidateError, UnknownTaskError
+from bench.core.prices import PriceTable, load_prices
+from bench.core.results import TaskResult
+from bench.core.rubric import Rubric, load_rubric
 from bench.core.runs import Run, create_run, open_run, suite_for
 from bench.core.scoring import RunScore, score_run
+from bench.core.settings import Settings, load_settings
 from bench.core.tasks import Task, load_tasks
 from bench.core.verdicts import Comparison, Verdict, compare, gate_verdict
 
@@ -54,7 +54,7 @@ class Workspace:
         raise UnknownTaskError(f"no Task {task_id!r}{hint}")
 
     def runnable_task(self, task_id: str) -> Task:
-        """The Task, or TaskNotRunnable if its input, Gold Answer or Manual Time is a placeholder."""
+        """The Task; TaskNotRunnable if its input, Gold Answer or Manual Time is a placeholder."""
         task = self.task(task_id)
         if task.placeholders:
             raise TaskNotRunnable(

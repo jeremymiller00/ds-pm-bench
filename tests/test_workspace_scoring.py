@@ -26,7 +26,10 @@ def result(**overrides) -> TaskResult:
 # Default band: better lower, thresholds [0.05, 0.15, 0.30, 0.50].
 @pytest.mark.parametrize(
     "edit_distance, expected",
-    [(0.0, 5), (0.05, 5), (0.051, 4), (0.15, 4), (0.30, 3), (0.31, 2), (0.50, 2), (0.51, 1), (1.0, 1)],
+    [
+        (0.0, 5), (0.05, 5), (0.051, 4), (0.15, 4), (0.30, 3),
+        (0.31, 2), (0.50, 2), (0.51, 1), (1.0, 1),
+    ],
 )
 def test_edit_distance_is_banded_lower_is_better(workspace_dir: Path, edit_distance, expected):
     ws = Workspace.open(workspace_dir)
@@ -147,7 +150,9 @@ def test_track_quality_is_the_average_of_its_tasks_quality(workspace_dir: Path):
         [
             result(task_id="T1.1", track="Framing", criterion_scores={"correctness": 4}),
             result(task_id="T1.2", track="Framing", criterion_scores={"correctness": 3}),
-            result(task_id="T2.1", track="Specs", criterion_scores={"correctness": 5, "clarity": 4}),
+            result(
+                task_id="T2.1", track="Specs", criterion_scores={"correctness": 5, "clarity": 4}
+            ),
         ]
     )
 

@@ -88,7 +88,11 @@ def test_default_config_has_spec_margins_and_thresholds(workspace_dir: Path):
         ("regression_margin", "null", "regression_margin"),
         ("retest_margin", "'small'", "retest_margin"),
         ("spot_check_rate", "1.5", "spot_check_rate"),
-        ("calibration", "{within_one_point: 90, weighted_kappa: 0.6}", "calibration.within_one_point"),
+        (
+            "calibration",
+            "{within_one_point: 90, weighted_kappa: 0.6}",
+            "calibration.within_one_point",
+        ),
         ("calibration", "{within_one_point: 0.9}", "calibration.weighted_kappa"),
         ("calibration", "0.9", "calibration"),
     ],
@@ -143,13 +147,16 @@ def test_default_config_has_normalization_bands_for_each_measure(workspace_dir: 
         assert list(band.thresholds) == sorted(band.thresholds)
 
 
+ED = "normalization.edit_distance"
+
+
 @pytest.mark.parametrize(
     "value, field",
     [
-        ("{better: lower, thresholds: [0.05, 0.3, 0.15, 0.5]}", "normalization.edit_distance.thresholds"),
-        ("{better: lower, thresholds: [0.05, 0.15, 0.3]}", "normalization.edit_distance.thresholds"),
-        ("{better: lower, thresholds: [0.05, 0.15, x, 0.5]}", "normalization.edit_distance.thresholds[2]"),
-        ("{better: sideways, thresholds: [0.05, 0.15, 0.3, 0.5]}", "normalization.edit_distance.better"),
+        ("{better: lower, thresholds: [0.05, 0.3, 0.15, 0.5]}", f"{ED}.thresholds"),
+        ("{better: lower, thresholds: [0.05, 0.15, 0.3]}", f"{ED}.thresholds"),
+        ("{better: lower, thresholds: [0.05, 0.15, x, 0.5]}", f"{ED}.thresholds[2]"),
+        ("{better: sideways, thresholds: [0.05, 0.15, 0.3, 0.5]}", f"{ED}.better"),
     ],
     ids=["not-ascending", "wrong-count", "non-numeric", "bad-direction"],
 )

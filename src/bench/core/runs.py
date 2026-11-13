@@ -11,6 +11,7 @@ runs/<date>-<candidate>/ in the public repo holds:
 from __future__ import annotations
 
 import datetime
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -18,8 +19,6 @@ from typing import Any
 import yaml
 
 from bench.core.candidates import Candidate
-from collections.abc import Mapping
-
 from bench.core.errors import (
     ClearanceError,
     GateNotPassed,

@@ -97,7 +97,7 @@ def _band(f: FieldReader, value: Any, field: str) -> Band:
     if not isinstance(thresholds, list) or len(thresholds) != 4:
         raise f.fail(f"{field}.thresholds", "must be a list of 4 numbers")
     numbers = [f.number(t, f"{field}.thresholds[{i}]") for i, t in enumerate(thresholds)]
-    if any(a >= b for a, b in zip(numbers, numbers[1:])):
+    if any(a >= b for a, b in zip(numbers, numbers[1:], strict=False)):
         raise f.fail(f"{field}.thresholds", f"must be strictly ascending, got {numbers}")
     return Band(better=better, thresholds=tuple(numbers))
 
