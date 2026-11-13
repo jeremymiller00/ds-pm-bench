@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import datetime
 from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
@@ -12,6 +13,7 @@ from bench.core.results import TaskResult
 from bench.core.rubric import Rubric, load_rubric
 from bench.core.candidates import Candidate, load_candidates
 from bench.core.errors import TaskNotRunnable, UnknownCandidateError, UnknownTaskError
+from bench.core.runs import Run, create_run
 from bench.core.scoring import RunScore, score_run
 from bench.core.tasks import Task, load_tasks
 
@@ -68,6 +70,12 @@ class Workspace:
             if candidate.id == candidate_id:
                 return candidate
         raise UnknownCandidateError(f"no Candidate {candidate_id!r} in candidates/")
+
+    def start_run(self, candidate_id: str, *, on: datetime.date | None = None) -> Run:
+        """Start a Run of the Candidate over every Task its Clearance allows."""
+        candidate = self.candidate(candidate_id)
+        tasks = tuple(self.runnable_task(t.id) for t in self.tasks)
+        return create_run(self.root, candidate, tasks, on or datetime.date.today())
 
     def score(self, results: Iterable[TaskResult]) -> RunScore:
         """Score a Run's per-Task result records with this Workspace's weights and bands."""
