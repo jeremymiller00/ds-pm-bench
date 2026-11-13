@@ -77,3 +77,22 @@ def test_a_challenger_within_the_retest_margin_below_the_baseline_is_retested(ws
 
     assert comparison.verdict.outcome == "re-test"
     assert any("re-test margin" in r for r in comparison.verdict.rationale)
+
+
+def test_a_track_regression_beyond_the_margin_rejects_a_higher_scoring_challenger(
+    ws_dir: Path,
+):
+    # Framing 5 lifts the weighted total, but Specs 3.4 is 0.6 below the Baseline's 4.
+    comparison = compare(ws_dir, quality={"T1.1": 5, "T2.1": 3.4})
+
+    assert comparison.challenger_score.weighted > comparison.baseline_score.weighted
+    assert comparison.verdict.outcome == "reject"
+    assert comparison.verdict.regressions == ("Specs",)
+    assert any("Regression" in r and "Specs" in r for r in comparison.verdict.rationale)
+
+
+def test_a_track_drop_within_the_regression_margin_is_not_a_regression(ws_dir: Path):
+    comparison = compare(ws_dir, quality={"T1.1": 5, "T2.1": 3.5})
+
+    assert comparison.verdict.outcome == "adopt"
+    assert comparison.verdict.regressions == ()

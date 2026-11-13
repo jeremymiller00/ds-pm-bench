@@ -13,6 +13,7 @@ from bench.core.settings import Settings
 class Verdict:
     outcome: str  # "adopt", "reject" or "re-test"
     rationale: tuple[str, ...]  # why, one reason per line, for the Decision Log
+    regressions: tuple[str, ...] = ()  # Tracks more than the margin below the Baseline
 
 
 @dataclass(frozen=True)
@@ -44,7 +45,27 @@ def compare(
 def decide(settings: Settings, challenger: RunScore, baseline: RunScore) -> Verdict:
     """The adopt rule, given a challenger with a passing Gate (it has a Run)."""
     gap = round(challenger.weighted - baseline.weighted, 9)  # margins compare exactly
+    regressions = tuple(
+        track
+        for track, quality in baseline.track_quality.items()
+        if round(quality - challenger.track_quality.get(track, quality), 9)
+        > settings.regression_margin
+    )
     scores = f"weighted {challenger.weighted:.2f} vs Baseline {baseline.weighted:.2f}"
+    if regressions:
+        drops = ", ".join(
+            f"{t} {challenger.track_quality[t]:.2f} vs {baseline.track_quality[t]:.2f}"
+            for t in regressions
+        )
+        return Verdict(
+            "reject",
+            (
+                f"Regression beyond the margin of {settings.regression_margin} "
+                f"in Track quality: {drops}",
+                scores,
+            ),
+            regressions,
+        )
     if gap >= 0:
         return Verdict("adopt", (f"{scores}: at least the Baseline's",))
     if -gap <= settings.retest_margin:
