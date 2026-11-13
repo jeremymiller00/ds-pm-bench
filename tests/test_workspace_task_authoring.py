@@ -2,7 +2,9 @@ from pathlib import Path
 
 import pytest
 
-from bench import ConfigError, TaskNotRunnable, Workspace
+from bench import ConfigError, TaskEditRefused, TaskNotRunnable, Workspace
+from test_workspace_candidates import write_candidate
+from test_workspace_runs import cleared
 
 CRITERIA = [
     {
@@ -134,3 +136,114 @@ def test_a_new_task_cannot_reuse_an_id_from_any_root(
 
     with pytest.raises(ValueError, match="T2.1 already exists"):
         new_task(ws, "T2.1", track="Specs")
+
+
+def test_an_edit_before_any_run_is_made_in_place(workspace_dir: Path):
+    ws = Workspace.open(workspace_dir)
+    new_task(ws)
+
+    task = ws.update_task(
+        "T1.1",
+        trap="Recommends a model before naming the decision.",
+        input="Churn rose 4% last quarter in the SMB segment.",
+        gold_answer="Problem: predict SMB churn 60 days ahead.",
+    )
+
+    assert task.version == 1
+    assert task.trap == "Recommends a model before naming the decision."
+    assert task.placeholders == ()
+    reopened = Workspace.open(workspace_dir)
+    assert reopened.task("T1.1") == task
+    assert reopened.runnable_task("T1.1").input_path.read_text() == (
+        "Churn rose 4% last quarter in the SMB segment."
+    )
+
+
+def test_every_field_can_be_edited(workspace_dir: Path):
+    ws = Workspace.open(workspace_dir)
+    new_task(ws)
+    criteria = [
+        {"id": "sizes_the_output", "name": "Sizes the output", "description": "Fits capacity."},
+        {"id": "flags_gaps", "name": "Flags gaps", "description": "Names missing data."},
+    ]
+
+    task = ws.update_task(
+        "T1.1",
+        track="Specs",
+        canonical_prompt="Write a one-page spec.",
+        criteria=criteria,
+        manual_time_minutes=30.5,
+    )
+
+    assert (task.track, task.canonical_prompt, task.manual_time_minutes) == (
+        "Specs",
+        "Write a one-page spec.",
+        30.5,
+    )
+    assert [c.id for c in task.rubric.criteria][-2:] == ["sizes_the_output", "flags_gaps"]
+
+
+def run_over(ws: Workspace, task_id: str) -> None:
+    """Start a Run that uses the Task's current version."""
+    write_candidate(ws.root, "claude@opus-5-5", cleared("public_only", baseline=True))
+    ws = Workspace.open(ws.root)
+    run = ws.start_run("claude@opus-5-5")
+    assert task_id in run.task_versions
+
+
+def complete_task(ws: Workspace, task_id: str = "T1.1") -> None:
+    new_task(ws, task_id)
+    ws.update_task(task_id, input="Churn rose 4%.", gold_answer="Predict SMB churn.")
+
+
+def test_an_edit_after_a_run_used_the_version_makes_a_new_version(workspace_dir: Path):
+    ws = Workspace.open(workspace_dir)
+    complete_task(ws)
+    run_over(ws, "T1.1")
+
+    task = ws.update_task("T1.1", trap="Recommends a model before naming the decision.")
+
+    assert task.version == 2
+    assert Workspace.open(workspace_dir).task("T1.1").version == 2
+    # Only one bump per used version: the new version has no Run yet.
+    assert ws.update_task("T1.1", manual_time_minutes=50).version == 2
+
+
+def test_an_edit_that_changes_nothing_keeps_the_version(workspace_dir: Path):
+    ws = Workspace.open(workspace_dir)
+    complete_task(ws)
+    run_over(ws, "T1.1")
+
+    assert ws.update_task("T1.1", manual_time_minutes=45).version == 1
+
+
+def test_visibility_cannot_be_changed_by_an_edit(workspace_dir: Path, private_root: Path):
+    ws = Workspace.open(workspace_dir)
+    new_task(ws, "T2.1", track="Specs", private_root=private_root)
+
+    with pytest.raises(TaskEditRefused, match="visibility"):
+        ws.update_task("T2.1", visibility="public")
+
+    assert ws.task("T2.1").visibility == "private"
+
+
+@pytest.mark.parametrize("field", ["id", "version", "owner"])
+def test_fields_outside_the_editable_ones_are_refused(workspace_dir: Path, field: str):
+    ws = Workspace.open(workspace_dir)
+    new_task(ws)
+
+    with pytest.raises(TaskEditRefused, match=field):
+        ws.update_task("T1.1", **{field: "x"})
+
+
+def test_an_invalid_edit_fails_naming_the_field_and_leaves_the_task_as_it_was(
+    workspace_dir: Path,
+):
+    ws = Workspace.open(workspace_dir)
+    before = new_task(ws)
+
+    with pytest.raises(ConfigError) as err:
+        ws.update_task("T1.1", track="Roadmaps", trap="A new trap.")
+
+    assert (err.value.file, err.value.field) == ("tasks/T1.1/task.md", "track")
+    assert Workspace.open(workspace_dir).task("T1.1") == before
