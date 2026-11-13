@@ -38,6 +38,29 @@ class Task:
     gold_answer_path: Path
 
 
+PUBLIC_TASK_FOLDERS = ("tasks",)
+PRIVATE_TASK_FOLDER = "tasks"
+
+
+def load_tasks(
+    workspace_root: Path, private_roots: tuple[Path, ...], shared: Rubric
+) -> tuple[Task, ...]:
+    """Public Tasks from the repo, then Private Tasks from each private root."""
+    sources = [(workspace_root / name, "public") for name in PUBLIC_TASK_FOLDERS]
+    sources += [(root / PRIVATE_TASK_FOLDER, "private") for root in private_roots]
+    tasks: list[Task] = []
+    for parent, visibility in sources:
+        for folder in sorted(p for p in parent.glob("*") if p.is_dir()):
+            task = load_task(workspace_root, folder, visibility, shared)
+            for other in tasks:
+                if other.id == task.id:
+                    raise FieldReader(_display(workspace_root, folder / TASK_FILE)).fail(
+                        "id", f"Task {task.id} is also defined in {other.folder}"
+                    )
+            tasks.append(task)
+    return tuple(sorted(tasks, key=lambda t: t.id))
+
+
 def load_task(
     workspace_root: Path, folder: Path, visibility: str, shared: Rubric
 ) -> Task:

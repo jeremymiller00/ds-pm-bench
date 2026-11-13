@@ -8,9 +8,8 @@ from pathlib import Path
 from bench.core.settings import Settings, load_settings
 from bench.core.prices import PriceTable, load_prices
 from bench.core.rubric import Rubric, load_rubric
-from bench.core.tasks import Task, load_task
-
-PUBLIC_TASK_FOLDERS = ("tasks",)
+from bench.core.errors import UnknownTaskError
+from bench.core.tasks import Task, load_tasks
 
 
 @dataclass(frozen=True)
@@ -26,21 +25,19 @@ class Workspace:
         root = Path(path).resolve()
         settings = load_settings(root)
         rubric = load_rubric(root)
-        tasks = [
-            load_task(root, folder, "public", rubric)
-            for name in PUBLIC_TASK_FOLDERS
-            for folder in sorted((root / name).glob("*/"))
-        ]
         return cls(
             root=root,
             settings=settings,
             rubric=rubric,
             prices=load_prices(root),
-            tasks=tuple(tasks),
+            tasks=load_tasks(root, settings.private_roots, rubric),
         )
 
     def task(self, task_id: str) -> Task:
         for task in self.tasks:
             if task.id == task_id:
                 return task
-        raise KeyError(task_id)
+        hint = "" if self.settings.private_roots else (
+            "; no private roots are configured, so Private Tasks are not loaded"
+        )
+        raise UnknownTaskError(f"no Task {task_id!r}{hint}")

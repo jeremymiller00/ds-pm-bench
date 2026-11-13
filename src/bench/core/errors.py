@@ -11,3 +11,7 @@ class ConfigError(ValueError):
         self.field = field
         self.message = message
         super().__init__(f"{file}: {field}: {message}")
+
+
+class UnknownTaskError(LookupError):
+    """No Task with the requested id in any loaded root."""
