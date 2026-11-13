@@ -75,6 +75,11 @@ class _Fields:
             raise self.fail(field, f"must be at least {minimum}, got {value}")
         return value
 
+    def text(self, value: Any, field: str) -> str:
+        if not isinstance(value, str) or not value.strip():
+            raise self.fail(field, "must be non-empty text")
+        return value.strip()
+
     def fraction(self, value: Any, field: str) -> float:
         number = self.number(value, field)
         if not 0 <= number <= 1:

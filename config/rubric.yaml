@@ -1,0 +1,18 @@
+# Shared Rubric: the Criteria every Task's Output is scored against (1-5 each).
+# Tasks add one or two task-specific Criteria in their own rubric.yaml.
+criteria:
+  - id: correctness
+    name: Correctness
+    description: Claims are true to the input; nothing is invented, such as a metric the input never states.
+  - id: completeness
+    name: Completeness
+    description: Covers everything the Task asks for and the Gold Answer treats as essential.
+  - id: clarity
+    name: Clarity
+    description: A stakeholder can read it once and understand it; structure and wording are plain.
+  - id: pm_judgment
+    name: PM judgment
+    description: Makes sound product trade-offs, prioritizes, and flags risks and open questions a good DS PM would.
+  - id: format_fit
+    name: Format fit
+    description: Matches the expected output format and length, ready to use with light edits.
