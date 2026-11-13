@@ -2,14 +2,17 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 
 from bench.core.settings import Settings, load_settings
 from bench.core.prices import PriceTable, load_prices
+from bench.core.results import TaskResult
 from bench.core.rubric import Rubric, load_rubric
 from bench.core.candidates import Candidate, load_candidates
 from bench.core.errors import TaskNotRunnable, UnknownCandidateError, UnknownTaskError
+from bench.core.scoring import RunScore, score_run
 from bench.core.tasks import Task, load_tasks
 
 
@@ -65,3 +68,7 @@ class Workspace:
             if candidate.id == candidate_id:
                 return candidate
         raise UnknownCandidateError(f"no Candidate {candidate_id!r} in candidates/")
+
+    def score(self, results: Iterable[TaskResult]) -> RunScore:
+        """Score a Run's per-Task result records with this Workspace's weights and bands."""
+        return score_run(self.settings, results)

@@ -1,0 +1,37 @@
+# Golden fixture: three per-Task result records and their hand-computed scores
+# under the default config (weights 50/20/20/10, default bands).
+results:
+  - task_id: T1.1
+    track: Framing
+    criterion_scores: {correctness: 5, completeness: 4, clarity: 3}  # Quality 4
+    edit_distance: 0.10        # 4
+    active_seconds: 1800       # of 60 min: 50% saved -> 3
+    manual_minutes: 60
+    cost_usd: 0.03             # 4
+    latency_seconds: 20        # 4 -> Cost/latency 4
+  - task_id: T1.2
+    track: Framing
+    criterion_scores: {correctness: 3, completeness: 3, clarity: 2, pm_judgment: 4}  # 3
+    edit_distance: 0.40        # 2
+    active_seconds: 2400       # of 30 min: slower than by hand -> 1
+    manual_minutes: 30
+    cost_usd: null             # no per-Task cost
+    latency_seconds: 90        # 2 -> Cost/latency 2, latency only
+  - task_id: T2.1
+    track: Specs
+    criterion_scores: {correctness: 5, clarity: 5}  # 5
+    edit_distance: 0.0         # 5
+    active_seconds: 600        # of 120 min: 91.7% saved -> 5
+    manual_minutes: 120
+    cost_usd: 0.50             # 2
+    latency_seconds: 5         # 5 -> Cost/latency 3.5
+
+expected:
+  tasks:
+    T1.1: {quality: 4, edit_distance: 4, time_saved: 3, cost_latency: 4, weighted: 3.8, latency_only: false}
+    T1.2: {quality: 3, edit_distance: 2, time_saved: 1, cost_latency: 2, weighted: 2.3, latency_only: true}
+    T2.1: {quality: 5, edit_distance: 5, time_saved: 5, cost_latency: 3.5, weighted: 4.85, latency_only: false}
+  dimensions: {quality: 4.0, edit_distance: 3.6666667, time_saved: 3.0, cost_latency: 3.1666667}
+  weighted: 3.65
+  track_quality: {Framing: 3.5, Specs: 5.0}
+  latency_only_tasks: [T1.2]
