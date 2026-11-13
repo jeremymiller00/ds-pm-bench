@@ -50,7 +50,8 @@ class Task:
     placeholders: tuple[str, ...]
 
 
-PUBLIC_TASK_FOLDERS = ("tasks",)
+# Public Tasks: the repo's tasks/ and the synthetic examples/ (ADR-0006).
+PUBLIC_TASK_FOLDERS = ("tasks", "examples")
 PRIVATE_TASK_FOLDER = "tasks"
 
 

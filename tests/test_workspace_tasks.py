@@ -1,8 +1,11 @@
+import shutil
 from pathlib import Path
 
 import pytest
 
 from bench import ConfigError, TaskNotRunnable, Workspace
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
 
 
 def write_task(
@@ -218,3 +221,14 @@ def test_task_with_a_placeholder_loads_but_is_refused_for_running(
     assert ws.task("T3.1").placeholders == (missing,)
     with pytest.raises(TaskNotRunnable, match=f"T3.1.*{missing}"):
         ws.runnable_task("T3.1")
+
+
+def test_the_committed_example_task_is_public_complete_and_runnable(workspace_dir: Path):
+    shutil.copytree(REPO_ROOT / "examples", workspace_dir / "examples")
+
+    ws = Workspace.open(workspace_dir)
+    task = ws.runnable_task("T1.1-example")
+
+    assert task.visibility == "public"
+    assert task.placeholders == ()
+    assert len(task.rubric.criteria) in (6, 7)  # shared five plus one or two

@@ -1,0 +1,8 @@
+# Task-specific Criteria, scored alongside the shared Rubric (1-5 each).
+criteria:
+  - id: grounded_success_criteria
+    name: Grounded success criteria
+    description: Success criteria use only numbers the input states (four account managers, about 25 calls each); a missing baseline is flagged, not invented.
+  - id: capacity_shaped_output
+    name: Capacity-shaped output
+    description: The output is sized to what the team can act on each week, a ranked list of about 100 subscribers, rather than a bare score.
