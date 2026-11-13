@@ -133,3 +133,19 @@ def test_bench_run_leaves_tasks_without_scores_pending_and_resume_completes_them
     assert bench(ws, "run", "--resume", BASELINE_RUN, "--results", str(full)) == 0
     assert "pending" not in capsys.readouterr().out
     assert bench(ws, "score", BASELINE_RUN) == 0
+
+
+def test_bench_run_suite_public_only_narrows_a_private_clearance(tmp_path: Path, capsys):
+    ws = golden_workspace("adopt-public-only", tmp_path)
+    challenger = ws / "candidates" / "other@1.yaml"
+    challenger.write_text(
+        challenger.read_text().replace("clearance: public_only", "clearance: public_and_private")
+    )
+    results = GOLDEN / "adopt-public-only" / "results" / "other@1"
+
+    assert bench(ws, "run", "other@1", "--results", str(results), "--on", DAY) == 1
+    assert "SuiteUnavailable" in capsys.readouterr().err
+
+    args = ("run", "other@1", "--suite", "public_only", "--results", str(results), "--on", DAY)
+    assert bench(ws, *args) == 0
+    assert Workspace.open(ws).resume_run(f"{DAY}-other@1").suite == "public_only"

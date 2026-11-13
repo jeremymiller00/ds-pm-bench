@@ -11,11 +11,20 @@ from typing import Any
 from bench.core.candidates import Candidate, load_candidates
 from bench.core.decisions import log_verdict, read_log
 from bench.core.errors import TaskNotRunnable, UnknownCandidateError, UnknownTaskError
+from bench.core.kinds import Suite
 from bench.core.lookup import find_by_id
 from bench.core.prices import PriceTable, load_prices
 from bench.core.results import TaskResult
 from bench.core.rubric import Rubric, load_rubric
-from bench.core.runs import Run, check_clearance, create_run, open_run, suite_for
+from bench.core.runs import (
+    Run,
+    check_clearance,
+    check_gate,
+    choose_suite,
+    create_run,
+    open_run,
+    tasks_in,
+)
 from bench.core.scoring import RunScore, score_run
 from bench.core.settings import Settings, load_settings
 from bench.core.tasks import Task, load_tasks
@@ -75,11 +84,23 @@ class Workspace:
             raise UnknownCandidateError(f"no Candidate {candidate_id!r} in candidates/")
         return candidate
 
-    def start_run(self, candidate_id: str, *, on: datetime.date | None = None) -> Run:
-        """Start a Run of the Candidate over every Task its Clearance allows."""
+    def start_run(
+        self,
+        candidate_id: str,
+        *,
+        suite: Suite | str | None = None,
+        on: datetime.date | None = None,
+    ) -> Run:
+        """Start a Run of the Candidate over a Suite.
+
+        suite defaults to every Task the Candidate's Clearance allows; public_only
+        narrows a private Clearance. A Suite never exceeds the Clearance (ClearanceError).
+        """
         candidate = self.candidate(candidate_id)
-        suite = tuple(self.runnable_task(t.id) for t in suite_for(candidate, self.tasks))
-        return create_run(self.root, candidate, suite, on or datetime.date.today())
+        check_gate(candidate)
+        chosen = choose_suite(candidate, suite, self.tasks)
+        tasks = tuple(self.runnable_task(t.id) for t in tasks_in(chosen, self.tasks))
+        return create_run(self.root, candidate, chosen, tasks, on or datetime.date.today())
 
     def task_input(self, run: Run, task_id: str) -> str:
         """The Canonical Prompt and input of a Task in the Run's Suite.

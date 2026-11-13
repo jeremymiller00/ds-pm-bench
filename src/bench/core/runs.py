@@ -25,6 +25,7 @@ from bench.core.errors import (
     RunExists,
     RunIncomplete,
     RunMismatch,
+    SuiteUnavailable,
     UnknownRunError,
     UnknownTaskError,
 )
@@ -230,9 +231,33 @@ def check_clearance(candidate: Candidate, task: Task) -> None:
         )
 
 
-def suite_for(candidate: Candidate, tasks: tuple[Task, ...]) -> tuple[Task, ...]:
-    """Every Task the Candidate's Clearance allows."""
-    if candidate.clearance == Clearance.PUBLIC_AND_PRIVATE:
+def choose_suite(
+    candidate: Candidate, requested: Suite | str | None, tasks: tuple[Task, ...]
+) -> Suite:
+    """The Suite a Run covers: the requested one, or by default all the Clearance allows.
+
+    A Suite may narrow the Clearance to public only but never exceed it. A privately
+    cleared Candidate with no Private Tasks loaded is refused rather than silently given
+    a public-only Suite; ask for public_only explicitly.
+    """
+    cleared = Suite(candidate.clearance)
+    suite = cleared if requested is None else Suite(requested)
+    if suite == Suite.PUBLIC_AND_PRIVATE and cleared != Suite.PUBLIC_AND_PRIVATE:
+        raise ClearanceError(
+            f"Candidate {candidate.id} is cleared for {cleared}, not a {suite} Suite"
+        )
+    has_private = any(t.visibility == Visibility.PRIVATE for t in tasks)
+    if suite == Suite.PUBLIC_AND_PRIVATE and not has_private:
+        raise SuiteUnavailable(
+            f"Candidate {candidate.id} is cleared for {suite} but no Private Tasks are "
+            f"loaded (check private_roots); ask for a {Suite.PUBLIC_ONLY} Suite explicitly"
+        )
+    return suite
+
+
+def tasks_in(suite: Suite, tasks: tuple[Task, ...]) -> tuple[Task, ...]:
+    """The Tasks a Suite covers."""
+    if suite == Suite.PUBLIC_AND_PRIVATE:
         return tasks
     return tuple(t for t in tasks if t.visibility == Visibility.PUBLIC)
 
@@ -240,11 +265,12 @@ def suite_for(candidate: Candidate, tasks: tuple[Task, ...]) -> tuple[Task, ...]
 def create_run(
     workspace_root: Path,
     candidate: Candidate,
-    suite: tuple[Task, ...],
+    suite: Suite,
+    tasks: tuple[Task, ...],
     date: datetime.date,
 ) -> Run:
     check_gate(candidate)
-    for task in suite:
+    for task in tasks:
         check_clearance(candidate, task)
     run_id = run_id_for(candidate, date)
     if (workspace_root / RUNS_FOLDER / run_id).exists():
@@ -253,12 +279,8 @@ def create_run(
         id=run_id,
         candidate=candidate,
         date=date,
-        suite=(
-            Suite.PUBLIC_AND_PRIVATE
-            if any(t.visibility == Visibility.PRIVATE for t in suite)
-            else Suite.PUBLIC_ONLY
-        ),
-        tasks=suite,
+        suite=suite,
+        tasks=tasks,
         folder=workspace_root / RUNS_FOLDER / run_id,
     )
     run.folder.mkdir(parents=True)

@@ -33,6 +33,10 @@ class ClearanceError(Exception):
     """Private content refused to a Candidate or Judge without private Clearance (ADR-0006)."""
 
 
+class SuiteUnavailable(Exception):
+    """The requested Suite has no Tasks to cover, such as private Clearance but no Private Tasks."""
+
+
 class UnknownRunError(LookupError):
     """No Run with the requested id under runs/."""
 

@@ -10,6 +10,7 @@ from bench import (
     RunExists,
     RunIncomplete,
     RunMismatch,
+    SuiteUnavailable,
     TaskResult,
     Workspace,
 )
@@ -87,6 +88,41 @@ def test_a_privately_cleared_candidate_gets_private_tasks_too(
     assert run.suite == "public_and_private"
     assert run.task_versions == {"T1.1": 2, "T2.1": 1, "T3.1": 1}
     assert "Real Q3 roadmap" in Workspace.open(ws_dir).task_input(run, "T3.1")
+
+
+def test_a_privately_cleared_candidate_can_be_narrowed_to_a_public_only_suite(
+    ws_dir: Path, private_root: Path
+):
+    ws = Workspace.open(ws_dir)
+    run = ws.start_run("cleared@1", suite="public_only", on=DAY)
+
+    assert run.suite == "public_only"
+    assert run.task_versions == {"T1.1": 2, "T2.1": 1}
+    with pytest.raises(LookupError, match="T3.1"):
+        ws.task_input(run, "T3.1")
+    resumed = Workspace.open(ws_dir).resume_run(run.id)
+    assert (resumed.suite, resumed.task_versions) == ("public_only", {"T1.1": 2, "T2.1": 1})
+
+
+def test_a_suite_cannot_exceed_the_candidates_clearance(ws_dir: Path, private_root: Path):
+    with pytest.raises(ClearanceError, match="claude@opus-5-5"):
+        Workspace.open(ws_dir).start_run("claude@opus-5-5", suite="public_and_private", on=DAY)
+
+    assert not (ws_dir / "runs").exists()
+
+
+def test_a_privately_cleared_candidate_without_private_tasks_needs_an_explicit_public_suite(
+    ws_dir: Path,
+):
+    write_candidate(ws_dir, "cleared@1", cleared("public_and_private"))
+    ws = Workspace.open(ws_dir)
+
+    with pytest.raises(SuiteUnavailable, match="public_only"):
+        ws.start_run("cleared@1", on=DAY)
+    assert not (ws_dir / "runs").exists()
+
+    run = ws.start_run("cleared@1", suite="public_only", on=DAY)
+    assert (run.suite, run.task_versions) == ("public_only", {"T1.1": 2, "T2.1": 1})
 
 
 def test_a_private_tasks_input_is_refused_without_private_clearance(

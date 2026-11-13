@@ -1,6 +1,7 @@
 """The `bench` command line: a thin client over the Workspace. No business logic here.
 
-  bench run CANDIDATE --results DIR [--on DATE]      start a Run and record results
+  bench run CANDIDATE --results DIR [--on DATE] [--suite public_only]
+                                                     start a Run and record results
   bench run --resume RUN_ID --results DIR            record results into an open Run
   bench score RUN_ID                                 print a Run's scores
   bench verdict CHALLENGER_RUN BASELINE_RUN [...]    compare two Runs, print the Verdict
@@ -27,8 +28,10 @@ from bench.core.errors import (
     RunIncomplete,
     RunMismatch,
     SuiteMismatch,
+    SuiteUnavailable,
     TaskNotRunnable,
 )
+from bench.core.kinds import Suite
 from bench.core.verdicts import Verdict
 from bench.core.workspace import Workspace
 
@@ -43,6 +46,7 @@ _REFUSALS = (
     RunIncomplete,
     RunMismatch,
     SuiteMismatch,
+    SuiteUnavailable,
     TaskNotRunnable,
 )
 
@@ -63,7 +67,12 @@ def main(argv: Sequence[str] | None = None) -> int:
 def _run(ws: Workspace, args: argparse.Namespace) -> int:
     if (args.candidate is None) == (args.resume is None):
         raise ValueError("give either a CANDIDATE to start a Run or --resume RUN_ID")
-    run = ws.resume_run(args.resume) if args.resume else ws.start_run(args.candidate, on=args.on)
+    if args.resume and (args.suite or args.on):
+        raise ValueError("--suite and --on set a new Run; a resumed Run keeps its own")
+    if args.resume:
+        run = ws.resume_run(args.resume)
+    else:
+        run = ws.start_run(args.candidate, suite=args.suite, on=args.on)
     results = Path(args.results)
     for task_id in run.pending:
         path = results / f"{task_id}.yaml"
@@ -150,6 +159,11 @@ def _parser() -> argparse.ArgumentParser:
         "--results", required=True, metavar="DIR", help="folder of <task id>.yaml result files"
     )
     run.add_argument("--on", type=_date, help="the Run date, YYYY-MM-DD (default: today)")
+    run.add_argument(
+        "--suite",
+        choices=[str(s) for s in Suite],
+        help="narrow the Suite (default: every Task the Candidate's Clearance allows)",
+    )
     run.set_defaults(command=_run)
 
     score = commands.add_parser("score", help="print a complete Run's scores")
