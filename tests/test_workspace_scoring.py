@@ -32,3 +32,29 @@ def test_edit_distance_is_banded_lower_is_better(workspace_dir: Path, edit_dista
     score = ws.score([result(edit_distance=edit_distance)])
 
     assert score.tasks[0].dimensions["edit_distance"] == expected
+
+
+# Time saved = share of Manual Time (60 min = 3600 s) saved.
+# Default band: better higher, thresholds [0.20, 0.40, 0.60, 0.80].
+@pytest.mark.parametrize(
+    "active_seconds, expected",
+    [
+        (4000, 1),  # slower than by hand
+        (3600, 1),  # nothing saved
+        (2881, 1),  # just under 20% saved
+        (2880, 2),  # 20% saved
+        (2160, 3),  # 40%
+        (1440, 4),  # 60%
+        (721, 4),  # just under 80%
+        (720, 5),  # 80%
+        (0, 5),
+    ],
+)
+def test_time_saved_is_share_of_manual_time_banded_higher_is_better(
+    workspace_dir: Path, active_seconds, expected
+):
+    ws = Workspace.open(workspace_dir)
+
+    score = ws.score([result(active_seconds=active_seconds, manual_minutes=60)])
+
+    assert score.tasks[0].dimensions["time_saved"] == expected
