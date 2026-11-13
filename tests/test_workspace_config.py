@@ -79,3 +79,54 @@ def test_default_config_has_spec_margins_and_thresholds(workspace_dir: Path):
     assert s.spot_check_rate == 0.25
     assert s.calibration.within_one_point == 0.9
     assert s.calibration.weighted_kappa == 0.6
+
+
+@pytest.mark.parametrize(
+    "key, value, field",
+    [
+        ("regression_margin", "-0.5", "regression_margin"),
+        ("regression_margin", "null", "regression_margin"),
+        ("retest_margin", "'small'", "retest_margin"),
+        ("spot_check_rate", "1.5", "spot_check_rate"),
+        ("calibration", "{within_one_point: 90, weighted_kappa: 0.6}", "calibration.within_one_point"),
+        ("calibration", "{within_one_point: 0.9}", "calibration.weighted_kappa"),
+        ("calibration", "0.9", "calibration"),
+    ],
+    ids=[
+        "negative-regression-margin",
+        "missing-regression-margin",
+        "non-numeric-retest-margin",
+        "spot-check-rate-above-1",
+        "within-one-point-as-percent",
+        "missing-kappa",
+        "calibration-not-a-mapping",
+    ],
+)
+def test_invalid_margins_and_thresholds_fail_naming_the_field(
+    workspace_dir: Path, key: str, value: str, field: str
+):
+    set_setting(workspace_dir, key, value)
+
+    with pytest.raises(ConfigError) as err:
+        Workspace.open(workspace_dir)
+
+    assert (err.value.file, err.value.field) == ("config/settings.yaml", field)
+
+
+def test_missing_settings_file_fails_naming_the_file(workspace_dir: Path):
+    (workspace_dir / "config" / "settings.yaml").unlink()
+
+    with pytest.raises(ConfigError) as err:
+        Workspace.open(workspace_dir)
+
+    assert err.value.file == "config/settings.yaml"
+    assert "missing" in str(err.value)
+
+
+def test_malformed_yaml_fails_naming_the_file(workspace_dir: Path):
+    (workspace_dir / "config" / "settings.yaml").write_text("weights: [unclosed\n")
+
+    with pytest.raises(ConfigError) as err:
+        Workspace.open(workspace_dir)
+
+    assert err.value.file == "config/settings.yaml"

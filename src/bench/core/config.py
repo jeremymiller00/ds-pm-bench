@@ -36,6 +36,17 @@ class _Fields:
     def __init__(self, file: str) -> None:
         self.file = file
 
+    def read(self, root: Path) -> dict[str, Any]:
+        """Parse the file as a YAML mapping."""
+        path = root / self.file
+        if not path.is_file():
+            raise self.fail("(file)", "is missing")
+        try:
+            data = yaml.safe_load(path.read_text())
+        except yaml.YAMLError as exc:
+            raise self.fail("(file)", f"is not valid YAML: {exc}") from exc
+        return self.mapping(data, "(file)")
+
     def fail(self, field: str, message: str) -> ConfigError:
         return ConfigError(self.file, field, message)
 
@@ -68,7 +79,7 @@ class _Fields:
 
 def load_settings(root: Path) -> Settings:
     f = _Fields(SETTINGS_FILE)
-    data = f.mapping(yaml.safe_load((root / SETTINGS_FILE).read_text()), "(root)")
+    data = f.read(root)
     calibration = f.mapping(data.get("calibration"), "calibration")
     f.exact_keys(calibration, "calibration", ("within_one_point", "weighted_kappa"))
     return Settings(
