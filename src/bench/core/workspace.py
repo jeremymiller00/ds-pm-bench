@@ -16,7 +16,7 @@ from bench.core.errors import TaskNotRunnable, UnknownCandidateError, UnknownTas
 from bench.core.runs import Run, create_run, open_run, suite_for
 from bench.core.scoring import RunScore, score_run
 from bench.core.tasks import Task, load_tasks
-from bench.core.verdicts import Comparison, compare
+from bench.core.verdicts import Comparison, Verdict, compare, gate_verdict
 
 
 @dataclass(frozen=True)
@@ -108,3 +108,10 @@ class Workspace:
             self.score(baseline.task_results()),
             spot_check_disagreement,
         )
+
+    def gate_verdict(self, candidate_id: str) -> Verdict:
+        """The reject Verdict for a Candidate whose Gate has not passed; needs no Runs."""
+        baseline = self.baseline
+        if baseline is None:  # unreachable: candidate() found at least one Candidate
+            raise UnknownCandidateError("no Baseline in candidates/")
+        return gate_verdict(self.candidate(candidate_id), baseline)

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from bench.core.candidates import Candidate
 from bench.core.errors import SuiteMismatch
 from bench.core.runs import PRIVATE_CLEARANCE, Run
 from bench.core.scoring import RunScore
@@ -100,6 +101,25 @@ def compare(
         challenger_score=challenger_score,
         baseline_score=baseline_score,
         verdict=verdict,
+    )
+
+
+def gate_verdict(candidate: Candidate, baseline: Candidate) -> Verdict:
+    """Reject a Candidate whose Gate has not passed. It can never have a Run to compare."""
+    if candidate.gate_passed:
+        raise ValueError(
+            f"Candidate {candidate.id}'s Gate passed; compare its Run with a Baseline Run"
+        )
+    reason = "no Gate review is recorded" if candidate.gate is None else "its Gate failed"
+    return Verdict(
+        outcome="reject",
+        suite=None,
+        rationale=(f"Gate: {reason}, so {candidate.id} cannot be Run or adopted",),
+        candidate_id=candidate.id,
+        candidate_version=candidate.version,
+        baseline_id=baseline.id,
+        baseline_version=baseline.version,
+        private_tasks=0,
     )
 
 

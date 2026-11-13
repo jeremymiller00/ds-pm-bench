@@ -190,3 +190,25 @@ def test_the_baseline_run_must_be_a_run_of_the_baseline(ws_dir: Path):
 
     with pytest.raises(ValueError, match="not the Baseline"):
         ws.compare(baseline_run, challenger_run)
+
+
+@pytest.mark.parametrize(
+    "gate", [None, {"result": "fail", "clearance": None}], ids=["no-gate", "failed-gate"]
+)
+def test_a_candidate_whose_gate_has_not_passed_is_rejected_without_runs(ws_dir: Path, gate):
+    data = cleared("public_and_private", version="bad-1")
+    data["gate"] = None if gate is None else {**data["gate"], **gate}
+    write_candidate(ws_dir, "bad@1", data)
+
+    verdict = Workspace.open(ws_dir).gate_verdict("bad@1")
+
+    assert verdict.outcome == "reject"
+    assert (verdict.candidate_version, verdict.baseline_id) == ("bad-1", BASELINE)
+    assert verdict.suite is None and verdict.challenger_run_id is None
+    assert any("Gate" in r for r in verdict.rationale)
+    assert not (ws_dir / "runs").exists()
+
+
+def test_a_gate_verdict_is_refused_for_a_candidate_whose_gate_passed(ws_dir: Path):
+    with pytest.raises(ValueError, match="passed"):
+        Workspace.open(ws_dir).gate_verdict(CHALLENGER)
