@@ -95,11 +95,12 @@ class Workspace:
 
         suite defaults to every Task the Candidate's Clearance allows; public_only
         narrows a private Clearance. A Suite never exceeds the Clearance (ClearanceError).
+        Tasks still holding a placeholder are left out and listed in Run.excluded.
         """
         candidate = self.candidate(candidate_id)
         check_gate(candidate)
         chosen = choose_suite(candidate, suite, self.tasks)
-        tasks = tuple(self.runnable_task(t.id) for t in tasks_in(chosen, self.tasks))
+        tasks = tasks_in(chosen, self.tasks)
         return create_run(self.root, candidate, chosen, tasks, on or datetime.date.today())
 
     def task_input(self, run: Run, task_id: str) -> str:

@@ -1,7 +1,8 @@
 """Runs: one Candidate against a Suite of Tasks on one date (ADR-0003, ADR-0006).
 
 runs/<date>-<candidate>/ in the public repo holds:
-  run.yaml              the snapshot: Candidate, Task versions, date, Suite
+  run.yaml              the snapshot: Candidate, Task versions, date, Suite, and the
+                        Tasks left out of the Suite as placeholders (excluded)
   results/<task>.yaml   numbers only per Task (timings, cost, Edit Distance, Criterion
                         scores), with the Task's visibility
   raw/<task>.md         raw Output       } Public Tasks only; for a Private Task these
@@ -12,7 +13,7 @@ from __future__ import annotations
 
 import datetime
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -48,6 +49,9 @@ class Run:
     suite: Suite
     tasks: tuple[Task, ...]  # the Suite, at the versions this Run uses
     folder: Path  # runs/<id>/ in the public repo
+    # Tasks the Suite would cover but left out because they still hold a placeholder:
+    # Task id -> what is a placeholder ("input", "Gold Answer", "Manual Time").
+    excluded: Mapping[str, tuple[str, ...]] = field(default_factory=dict)
 
     @property
     def candidate_id(self) -> str:
@@ -272,6 +276,7 @@ def create_run(
     check_gate(candidate)
     for task in tasks:
         check_clearance(candidate, task)
+    runnable = tuple(t for t in tasks if not t.placeholders)
     run_id = run_id_for(candidate, date)
     if (workspace_root / RUNS_FOLDER / run_id).exists():
         raise RunExists(f"Run {run_id} already exists; resume it instead")
@@ -280,8 +285,9 @@ def create_run(
         candidate=candidate,
         date=date,
         suite=suite,
-        tasks=tasks,
+        tasks=runnable,
         folder=workspace_root / RUNS_FOLDER / run_id,
+        excluded={t.id: t.placeholders for t in tasks if t.placeholders},
     )
     run.folder.mkdir(parents=True)
     (run.folder / RUN_FILE).write_text(yaml.safe_dump(_snapshot(run), sort_keys=False))
@@ -295,6 +301,7 @@ def _snapshot(run: Run) -> dict[str, Any]:
         "suite": str(run.suite),
         "candidate": _candidate_snapshot(run.candidate),
         "tasks": run.task_versions,
+        "excluded": {task_id: list(missing) for task_id, missing in run.excluded.items()},
     }
 
 
@@ -326,19 +333,23 @@ def open_run(
         raise RunMismatch(f"Run {run_id}: Candidate {snapped['id']} is missing or has changed")
     check_gate(candidate)
     by_id = {t.id: t for t in workspace_tasks}
-    suite = []
+    tasks = []
     for task_id, version in snapshot["tasks"].items():
         task = by_id.get(task_id)
         if task is None or task.version != version:
             found = "missing" if task is None else f"now version {task.version}"
             raise RunMismatch(f"Run {run_id} used Task {task_id} version {version}, {found}")
         check_clearance(candidate, task)
-        suite.append(task)
+        tasks.append(task)
     return Run(
         id=run_id,
         candidate=candidate,
         date=datetime.date.fromisoformat(snapshot["date"]),
         suite=Suite(snapshot["suite"]),
-        tasks=tuple(suite),
+        tasks=tuple(tasks),
         folder=folder,
+        excluded={
+            task_id: tuple(missing)
+            for task_id, missing in snapshot.get("excluded", {}).items()
+        },
     )

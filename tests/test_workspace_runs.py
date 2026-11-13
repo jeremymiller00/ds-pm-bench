@@ -125,6 +125,33 @@ def test_a_privately_cleared_candidate_without_private_tasks_needs_an_explicit_p
     assert (run.suite, run.task_versions) == ("public_only", {"T1.1": 2, "T2.1": 1})
 
 
+def test_a_placeholder_task_is_left_out_of_the_suite_and_recorded_on_the_run(ws_dir: Path):
+    write_task(ws_dir, "T1.2", gold="TODO: PM to write.\n", manual_time="null")
+
+    run = Workspace.open(ws_dir).start_run("claude@opus-5-5", on=DAY)
+
+    assert run.task_versions == {"T1.1": 2, "T2.1": 1}
+    assert run.excluded == {"T1.2": ("Gold Answer", "Manual Time")}
+    snapshot = yaml.safe_load((ws_dir / "runs" / run.id / "run.yaml").read_text())
+    assert snapshot["excluded"] == {"T1.2": ["Gold Answer", "Manual Time"]}
+    assert Workspace.open(ws_dir).resume_run(run.id).excluded == run.excluded
+
+
+def test_the_suite_label_follows_the_chosen_suite_not_the_tasks_that_loaded(
+    ws_dir: Path, tmp_path: Path
+):
+    private = tmp_path / "bench-private"
+    write_task(private, "T3.1", track="Prioritize", input_text="TODO")
+    configure_private_root(ws_dir, private)
+    write_candidate(ws_dir, "cleared@1", cleared("public_and_private"))
+
+    run = Workspace.open(ws_dir).start_run("cleared@1", on=DAY)
+
+    assert run.suite == "public_and_private"
+    assert run.task_versions == {"T1.1": 2, "T2.1": 1}
+    assert run.excluded == {"T3.1": ("input",)}
+
+
 def test_a_private_tasks_input_is_refused_without_private_clearance(
     ws_dir: Path, private_root: Path
 ):
