@@ -1,5 +1,6 @@
 """The `bench` command line: a thin client over the Workspace. No business logic here.
 
+  bench [tui]                                        open the TUI on the Workspace
   bench run CANDIDATE --results DIR [--on DATE] [--suite public_only]
                                                      start a Run and record results
   bench run --resume RUN_ID --results DIR            record results into an open Run
@@ -131,6 +132,13 @@ def _print_verdict(verdict: Verdict) -> None:
         print(f"  warning: {warning}")
 
 
+def _tui(ws: Workspace, args: argparse.Namespace) -> int:
+    from bench.tui.app import BenchApp  # Textual loads only when the TUI is opened
+
+    BenchApp(ws).run()
+    return 0
+
+
 def _date(text: str) -> datetime.date:
     try:
         return datetime.date.fromisoformat(text)
@@ -143,7 +151,11 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--workspace", default=".", help="the benchmark repo root (default: current directory)"
     )
-    commands = parser.add_subparsers(required=True, metavar="COMMAND")
+    parser.set_defaults(command=_tui)
+    commands = parser.add_subparsers(metavar="COMMAND")
+
+    tui = commands.add_parser("tui", help="open the TUI (the default with no COMMAND)")
+    tui.set_defaults(command=_tui)
 
     run = commands.add_parser("run", help="start or resume a Run and record results from files")
     run.add_argument("candidate", nargs="?", help="the Candidate to Run, <tool>@<version>")

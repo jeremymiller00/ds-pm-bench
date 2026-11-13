@@ -2,9 +2,11 @@
 
 from pathlib import Path
 
+import pytest
 from textual.widgets import Static, TabbedContent, Tabs, Tree
 
 from bench import Workspace
+from bench.cli import main
 from bench.tui.app import BenchApp
 
 
@@ -129,3 +131,18 @@ async def test_shell_opens_on_tasks_with_the_later_sections_as_placeholders(
         assert sections.active == "runs"
         placeholder = sections.query_one("#runs Static", Static)
         assert "not built yet" in str(placeholder.content)
+
+
+@pytest.mark.parametrize("args", [[], ["tui"]])
+def test_bench_with_no_command_or_tui_opens_the_app_on_the_workspace(
+    workspace_dir: Path, monkeypatch, args: list[str]
+):
+    write_task(workspace_dir, "T1.1")
+    opened: list[Workspace] = []
+    # The terminal is the boundary: record which Workspace the app would run on.
+    monkeypatch.setattr(BenchApp, "run", lambda app: opened.append(app.workspace))
+
+    assert main(["--workspace", str(workspace_dir), *args]) == 0
+
+    assert [ws.root for ws in opened] == [workspace_dir.resolve()]
+    assert [t.id for t in opened[0].tasks] == ["T1.1"]
