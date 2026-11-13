@@ -13,16 +13,19 @@ results file, and the CLI turns them into Runs, scores and Verdicts.
 ```sh
 uv sync
 uv run pytest            # includes the golden Verdict fixtures, driven through the CLI
+uv run ruff check        # lint and import order; also runs as a pre-commit hook
 uv run bench --help
 ```
 
 Run every command from the benchmark repo root, or pass `--workspace DIR`. The
 workspace needs `config/`, Tasks under `tasks/` or `examples/`, and Candidates under
-`candidates/` with exactly one marked `baseline: true`.
+`candidates/` with exactly one marked `baseline: true`. Each Task's `track` must be
+one of the `tracks` listed in `config/settings.yaml`.
 
 ### 1. Record a Run from results files
 
-A results folder holds one `<task id>.yaml` per Task in the Suite:
+A results folder holds one `<task id>.yaml` per Task in the Suite (an unknown key
+or a missing measure fails naming the file and field):
 
 ```yaml
 raw: the Candidate's raw Output
@@ -37,11 +40,22 @@ criterion_scores:          # optional; 1-5 for every shared and task Criterion
 
 ```sh
 bench run claude@opus-5-5 --results results/claude --on 2026-11-13
+bench run other@1 --suite public_only --results results/other --on 2026-11-13
 bench run --resume 2026-11-13-claude@opus-5-5 --results results/claude
 ```
 
 `bench run` starts the Run and records every Task that has a file; Tasks without one
 stay pending, and `--resume` records them later. The Run id is `<date>-<candidate>`.
+
+The Suite defaults to every Task the Candidate's Clearance allows. `--suite
+public_only` narrows a private Clearance; a Suite never exceeds the Clearance. A
+Candidate cleared for private Tasks when none are loaded (no `private_roots`) is
+refused unless you pass `--suite public_only`. Tasks still holding a placeholder
+(input, Gold Answer or Manual Time) are left out of the Suite and listed under
+`excluded` in the Run's `run.yaml`.
+
+A Run resumes only while its Candidate (tool, version, adapter, settings) and Task
+versions are unchanged (ADR 0003).
 
 ### 2. Score a Run
 
@@ -51,17 +65,29 @@ bench score 2026-11-13-claude@opus-5-5
 
 Prints the weighted score, each Dimension and each Track's Quality.
 
-### 3. Reach a Verdict
+### 3. Record Spot-checks
 
 ```sh
-bench verdict 2026-11-13-other@1 2026-11-13-claude@opus-5-5 [--spot-check-disagreement 1.5]
+bench spot-check 2026-11-13-other@1 T1.1-example clarity 3.5
+```
+
+Records a human's 1-5 score for one Criterion the Judge already scored, and prints
+how far apart they are. A Comparison re-tests when any Spot-check on either Run is
+more than 1 point from the Judge.
+
+### 4. Reach a Verdict
+
+```sh
+bench verdict 2026-11-13-other@1 2026-11-13-claude@opus-5-5
 bench verdict --gate other@1                     # a Candidate whose Gate failed
 bench verdict ... --log --on 2026-11-13 [--judge-setup-hash HASH]
 ```
 
 The first Run is the challenger, the second must be a Run of the Baseline. The first
 line is the Verdict and its label (`adopt (public-only Suite, not a full adopt)` when
-no Private Tasks were in the Suite), followed by the rationale. `--log` appends it to
+the Suite was public only), followed by the rationale. The rules apply in order:
+Gate, Spot-check, Regression, then the weighted score against the Baseline (adopt,
+re-test within the margin, reject). `--log` appends it to
 the Decision Log under `decisions/`.
 
 ### Golden fixtures
@@ -69,5 +95,6 @@ the Decision Log under `decisions/`.
 `tests/fixtures/golden/<case>/` holds the Candidates and results files for one
 Verdict path over the public `examples/` Task: `adopt-public-only`,
 `reject-by-weighted`, `reject-by-regression`, `reject-by-gate`, `retest-by-margin`
-and `retest-by-spot-check`. Each `case.yaml` states the expected Verdict, and
-`tests/test_cli.py` reaches it through `bench run` and `bench verdict`.
+and `retest-by-spot-check`. Each `case.yaml` states the expected Verdict (and any Spot-checks
+to record), and `tests/test_cli.py` reaches it through `bench run`, `bench
+spot-check` and `bench verdict`.
