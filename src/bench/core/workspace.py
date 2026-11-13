@@ -8,6 +8,9 @@ from pathlib import Path
 from bench.core.settings import Settings, load_settings
 from bench.core.prices import PriceTable, load_prices
 from bench.core.rubric import Rubric, load_rubric
+from bench.core.tasks import Task, load_task
+
+PUBLIC_TASK_FOLDERS = ("tasks",)
 
 
 @dataclass(frozen=True)
@@ -16,13 +19,28 @@ class Workspace:
     settings: Settings
     rubric: Rubric
     prices: PriceTable
+    tasks: tuple[Task, ...]
 
     @classmethod
     def open(cls, path: str | Path) -> Workspace:
         root = Path(path).resolve()
+        settings = load_settings(root)
+        rubric = load_rubric(root)
+        tasks = [
+            load_task(root, folder, "public", rubric)
+            for name in PUBLIC_TASK_FOLDERS
+            for folder in sorted((root / name).glob("*/"))
+        ]
         return cls(
             root=root,
-            settings=load_settings(root),
-            rubric=load_rubric(root),
+            settings=settings,
+            rubric=rubric,
             prices=load_prices(root),
+            tasks=tuple(tasks),
         )
+
+    def task(self, task_id: str) -> Task:
+        for task in self.tasks:
+            if task.id == task_id:
+                return task
+        raise KeyError(task_id)
