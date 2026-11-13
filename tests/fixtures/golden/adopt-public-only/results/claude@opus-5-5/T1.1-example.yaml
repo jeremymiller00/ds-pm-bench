@@ -1,0 +1,16 @@
+# Baseline result. Of 30 min Manual Time, 10 min active: 67% saved -> Time saved 4.
+# Edit Distance 1 word in 5 = 0.2 -> 3. Cost 0.03 -> 4, latency 12 s -> 4.
+# Every Criterion 4 -> Quality 4. Weighted 0.5*4 + 0.2*3 + 0.2*4 + 0.1*4 = 3.8.
+raw: one two three four five
+final: one two three four six
+active_seconds: 600
+latency_seconds: 12
+cost_usd: 0.03
+criterion_scores:
+  correctness: 4
+  completeness: 4
+  clarity: 4
+  pm_judgment: 4
+  format_fit: 4
+  grounded_success_criteria: 4
+  capacity_shaped_output: 4

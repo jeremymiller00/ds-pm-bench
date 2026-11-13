@@ -1,0 +1,6 @@
+# Golden Verdict path: the challenger beats the Baseline on weighted score.
+challenger: other@1
+verdict_args: []
+expected:
+  outcome: adopt
+  label: adopt (public-only Suite, not a full adopt)
