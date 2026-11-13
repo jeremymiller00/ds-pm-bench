@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from bench.core.config import _Fields
+from bench.core.fields import FieldReader
 
 RUBRIC_FILE = "config/rubric.yaml"
 
@@ -33,11 +33,11 @@ class Rubric:
 
 
 def load_rubric(root: Path) -> Rubric:
-    f = _Fields(RUBRIC_FILE)
+    f = FieldReader(RUBRIC_FILE)
     return Rubric(criteria=parse_criteria(f, f.read(root).get("criteria"), "criteria"))
 
 
-def parse_criteria(f: _Fields, value: Any, field: str) -> tuple[Criterion, ...]:
+def parse_criteria(f: FieldReader, value: Any, field: str) -> tuple[Criterion, ...]:
     """Parse a non-empty list of Criteria with unique ids. Reused by task rubrics."""
     if not isinstance(value, list) or not value:
         raise f.fail(field, "must be a non-empty list of Criteria")

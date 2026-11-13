@@ -5,7 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from bench.core.config import Settings, load_settings
+from bench.core.settings import Settings, load_settings
+from bench.core.prices import PriceTable, load_prices
 from bench.core.rubric import Rubric, load_rubric
 
 
@@ -14,8 +15,14 @@ class Workspace:
     root: Path
     settings: Settings
     rubric: Rubric
+    prices: PriceTable
 
     @classmethod
     def open(cls, path: str | Path) -> Workspace:
         root = Path(path).resolve()
-        return cls(root=root, settings=load_settings(root), rubric=load_rubric(root))
+        return cls(
+            root=root,
+            settings=load_settings(root),
+            rubric=load_rubric(root),
+            prices=load_prices(root),
+        )

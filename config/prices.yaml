@@ -1,0 +1,9 @@
+# Price table used to compute cost from token usage for automated Candidates.
+# USD per million tokens, keyed by the exact model string a Candidate uses.
+# Fill in from each provider's published pricing; do not guess.
+#
+# models:
+#   provider/model-version:
+#     input_per_mtok: 0.00
+#     output_per_mtok: 0.00
+models: {}
