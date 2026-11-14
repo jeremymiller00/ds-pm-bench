@@ -11,7 +11,7 @@ from textual.widgets import DataTable, Static
 from bench.core.candidates import Candidate
 from bench.core.errors import CandidateAuthoringError
 from bench.core.workspace import Workspace
-from bench.tui.candidate_editor import GateScreen, NewCandidateScreen
+from bench.tui.candidate_editor import GateRecorded, GateScreen, NewCandidateScreen
 
 COLUMNS = ("Candidate", "Version", "Adapter", "Baseline", "Gate", "Clearance")
 
@@ -86,20 +86,20 @@ class CandidateBrowser(Vertical):
         if candidate_id is None:
             self._status("Highlight a Candidate to record its Gate review.")
             return
-        logged_before = len(self.workspace.decision_log())
 
-        def recorded(c: Candidate | None) -> None:
-            if c is None:
+        def recorded(result: GateRecorded | None) -> None:
+            if result is None:
                 return
+            c, verdict = result
             self.refresh_candidates(select=c.id)
             if c.gate_passed:
                 self._status(f"{c.id} passed its Gate: Clearance {c.clearance}.")
                 return
             message = f"{c.id} failed its Gate: no Clearance."
-            for entry in self.workspace.decision_log()[logged_before:]:
+            if verdict is not None and c.gate is not None:
                 message += (
-                    f"\nDecision Log: {entry['verdict']} for {entry['candidate']['id']} "
-                    f"on {entry['date']}. " + " ".join(entry["rationale"])
+                    f"\nDecision Log: {verdict.outcome} for {verdict.candidate_id} "
+                    f"on {c.gate.date.isoformat()}. " + " ".join(verdict.rationale)
                 )
             self._status(message)
 

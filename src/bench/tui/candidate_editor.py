@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import datetime
-from typing import Any
+from typing import Any, NamedTuple
 
 import yaml
 from textual.app import ComposeResult
@@ -15,6 +15,7 @@ from textual.widgets import Button, Checkbox, Input, Label, Select, Static, Text
 from bench.core.candidates import ADAPTER_KINDS, Candidate
 from bench.core.errors import CandidateAuthoringError, ConfigError
 from bench.core.kinds import Clearance
+from bench.core.verdicts import Verdict
 from bench.core.workspace import Workspace
 from bench.tui.task_editor import EDITOR_CSS, FormError
 
@@ -81,8 +82,15 @@ class NewCandidateScreen(ModalScreen[Candidate | None]):
         self.dismiss(None)
 
 
-class GateScreen(ModalScreen[Candidate | None]):
-    """Fill one Candidate's Gate checklist; dismisses with the gated Candidate, or None."""
+class GateRecorded(NamedTuple):
+    """A recorded Gate review: the Candidate as it now stands and the Verdict it logged."""
+
+    candidate: Candidate
+    verdict: Verdict | None
+
+
+class GateScreen(ModalScreen[GateRecorded | None]):
+    """Fill one Candidate's Gate checklist; dismisses with what was recorded, or None."""
 
     DEFAULT_CSS = EDITOR_CSS.replace("#editor", "#gate")
     BINDINGS = [
@@ -98,8 +106,8 @@ class GateScreen(ModalScreen[Candidate | None]):
     def compose(self) -> ComposeResult:
         with VerticalScroll(id="gate"):
             yield Static(
-                f"Gate review of {self.candidate_id}. A failed Gate logs a reject Verdict. "
-                "ctrl+s records it, escape cancels.",
+                f"Gate review of {self.candidate_id}. A review that fails the Gate logs "
+                "a reject Verdict. ctrl+s records it, escape cancels.",
                 markup=False,
             )
             yield Label("Reviewer")
@@ -130,7 +138,7 @@ class GateScreen(ModalScreen[Candidate | None]):
     def action_save(self) -> None:
         clearance = str(self.query_one("#gate-clearance", Select).value)
         try:
-            gated = self.workspace.record_gate(
+            verdict = self.workspace.record_gate(
                 self.candidate_id,
                 reviewer=self.query_one("#gate-reviewer", Input).value.strip(),
                 on=parse_date(self.query_one("#gate-date", Input).value),
@@ -147,7 +155,7 @@ class GateScreen(ModalScreen[Candidate | None]):
         except AUTHORING_ERRORS as error:
             self.query_one("#gate-error", Static).update(str(error))
             return
-        self.dismiss(gated)
+        self.dismiss(GateRecorded(self.workspace.candidate(self.candidate_id), verdict))
 
     def action_cancel(self) -> None:
         self.dismiss(None)

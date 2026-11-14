@@ -117,7 +117,7 @@ def test_a_passing_gate_is_recorded_with_its_clearance(workspace_dir: Path):
     ws = Workspace.open(workspace_dir)
     c = new_candidate(ws)
 
-    gated = ws.record_gate(
+    ws.record_gate(
         c.id,
         reviewer="J. Reviewer",
         on=DAY,
@@ -125,6 +125,8 @@ def test_a_passing_gate_is_recorded_with_its_clearance(workspace_dir: Path):
         passed=True,
         clearance="public_only",
     )
+
+    gated = ws.candidate(c.id)
 
     assert gated.id == c.id
     assert gated.gate_passed and gated.clearance == "public_only"
@@ -141,7 +143,7 @@ def test_a_failed_gate_logs_a_reject_verdict(workspace_dir: Path):
     baseline = new_candidate(ws)
     other = new_candidate(ws, tool="Other", version="1", baseline=False)
 
-    failed = ws.record_gate(
+    verdict = ws.record_gate(
         other.id,
         reviewer="J. Reviewer",
         on=DAY,
@@ -150,7 +152,9 @@ def test_a_failed_gate_logs_a_reject_verdict(workspace_dir: Path):
         clearance=None,
     )
 
+    failed = ws.candidate(other.id)
     assert failed.gate.result == "fail" and failed.clearance is None
+    assert verdict.outcome == "reject" and verdict.candidate_id == other.id
     [entry] = ws.decision_log()
     assert entry["date"] == "2026-11-13"
     assert entry["verdict"] == "reject"
@@ -189,6 +193,7 @@ def test_an_invalid_gate_names_the_field_and_changes_nothing(
 
 
 def gated(ws: Workspace, candidate_id: str, *, on=DAY, **checklist):
+    """Record a passing Gate review; returns what record_gate does."""
     return ws.record_gate(
         candidate_id,
         reviewer="J. Reviewer",
@@ -204,7 +209,9 @@ def used(workspace_dir: Path):
     """A gated Baseline that a Run has used, and the Run."""
     write_task(workspace_dir, "T1.1")
     ws = Workspace.open(workspace_dir)
-    c = gated(ws, new_candidate(ws).id)
+    c = new_candidate(ws)
+    gated(ws, c.id)
+    c = ws.candidate(c.id)
     run = ws.start_run(c.id, on=DAY)
     return ws, c, run
 
@@ -250,10 +257,12 @@ def test_regating_a_used_candidate_updates_its_gate_in_place(workspace_dir: Path
     ws, c, run = used
     later = DAY + datetime.timedelta(days=1)
 
-    regated = ws.record_gate(
+    ws.record_gate(
         c.id, reviewer="A. Nother", on=later, checklist=CHECKLIST, passed=False,
         clearance=None,
     )
+
+    regated = ws.candidate(c.id)
 
     assert regated.id == c.id and regated.lineage_position == 1
     assert [x.id for x in Workspace.open(workspace_dir).candidates] == [c.id]
@@ -332,3 +341,25 @@ def test_a_manual_assisted_candidate_records_its_flat_cost_per_task(workspace_di
     assert Workspace.open(workspace_dir).candidate(manual.id).task_cost_usd == 0.25
     assert unpriced.task_cost_usd is None
     assert ws.candidate("claude@claude-opus-5-5").task_cost_usd is None
+
+
+def test_only_the_review_that_fails_the_gate_logs_a_reject(workspace_dir: Path):
+    ws = Workspace.open(workspace_dir)
+    c = new_candidate(ws)
+    fail = dict(reviewer="J. Reviewer", checklist=CHECKLIST, passed=False, clearance=None)
+
+    first = ws.record_gate(c.id, on=DAY, **fail)
+    again = ws.record_gate(c.id, on=DAY + datetime.timedelta(days=1), **fail)
+    gated(ws, c.id, on=DAY + datetime.timedelta(days=2))
+    third = ws.record_gate(c.id, on=DAY + datetime.timedelta(days=3), **fail)
+
+    assert [e["date"] for e in ws.decision_log()] == ["2026-11-13", "2026-11-16"]
+    assert first.outcome == "reject" and third.outcome == "reject"
+    assert again is None
+
+
+def test_a_passing_review_logs_nothing(workspace_dir: Path):
+    ws = Workspace.open(workspace_dir)
+
+    assert gated(ws, new_candidate(ws).id) is None
+    assert ws.decision_log() == ()

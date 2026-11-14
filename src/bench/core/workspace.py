@@ -339,7 +339,7 @@ class Workspace:
         checklist: dict[str, Any],
         passed: bool,
         clearance: Clearance | str | None,
-    ) -> Candidate:
+    ) -> Verdict | None:
         """Add a review to the Candidate's Gate; the latest review applies (ADR-0003).
 
         The Gate is a review record, not part of what a Run freezes, so it is updated in
@@ -347,10 +347,13 @@ class Workspace:
         applies at once to every Run of the Candidate, including one in progress.
         checklist holds retention (text), sso (bool), enterprise_terms (bool) and
         connector_support (text). A passing Gate needs a Clearance; a failed one grants
-        none, and appends a reject Verdict to the Decision Log dated on (story 18).
-        Invalid fields raise ConfigError naming the field and change nothing.
+        none. A review that moves the Gate to failed appends a reject Verdict to the
+        Decision Log dated on (story 18) and returns it; a repeated fail, or a pass,
+        logs nothing and returns None. Invalid fields raise ConfigError naming the field
+        and change nothing.
         """
         candidate = self.candidate(candidate_id)
+        was_failed = candidate.gate is not None and not candidate.gate.passed
         f = FieldReader(f"{CANDIDATES_FOLDER}/{candidate.id}.yaml")
         review = gate_data(
             f, reviewer=reviewer, on=on, checklist=checklist, passed=passed,
@@ -359,10 +362,11 @@ class Workspace:
         reviews = candidate_data(candidate)["gate"]
         self._write(candidate, gate=[*reviews, review])
         self._reload_candidates()
-        gated = self.candidate(candidate.id)
-        if not gated.gate_passed:
-            self.log_verdict(self.gate_verdict(gated.id), on=on)
-        return gated
+        if passed or was_failed:
+            return None
+        verdict = self.gate_verdict(candidate.id)
+        self.log_verdict(verdict, on=on)
+        return verdict
 
     def update_candidate(self, candidate_id: str, **changes: Any) -> Candidate:
         """Change a Candidate's adapter, settings, env_vars or cost_per_task_usd.
