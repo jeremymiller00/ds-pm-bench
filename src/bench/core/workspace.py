@@ -19,6 +19,12 @@ from bench.core.adapters import (
     JudgeModels,
     SystemClock,
 )
+from bench.core.archive import (
+    archive_judge_prompt,
+    archive_rubric,
+    archived_judge_prompt,
+    archived_rubric,
+)
 from bench.core.attempts import Attempt
 from bench.core.automated import ReturnedOutput, load_returned, run_task
 from bench.core.calibration import Agreement, CalibrationItem, CalibrationSet
@@ -50,6 +56,8 @@ from bench.core.errors import (
     CandidateAuthoringError,
     CandidateUnavailable,
     CertificationFailed,
+    ConfigEditRefused,
+    ConfigError,
     GateNotPassed,
     JudgeNotCertified,
     JudgeRefused,
@@ -81,7 +89,7 @@ from bench.core.lookup import find_by_id
 from bench.core.manual_time import ManualTimeStopwatch
 from bench.core.prices import PriceTable, load_prices, remove_price, set_price
 from bench.core.results import TaskResult
-from bench.core.rubric import Rubric, load_rubric
+from bench.core.rubric import RUBRIC_FILE, Rubric, load_rubric, parse_rubric_edit, write_rubric
 from bench.core.runs import (
     Run,
     SpotCheck,
@@ -522,7 +530,8 @@ class Workspace:
         check_gate(candidate)
         chosen = choose_suite(candidate, suite, self.tasks)
         tasks = tasks_in(chosen, self.tasks)
-        return create_run(self.root, candidate, chosen, tasks, on or self.clock.today())
+        return create_run(self.root, candidate, chosen, tasks, on or self.clock.today(),
+                          archive_rubric(self.root, self.rubric))
 
     def task_input(self, run: Run, task_id: str) -> str:
         """The Canonical Prompt and input of a Task in the Run's Suite.
@@ -673,6 +682,7 @@ class Workspace:
         for task in tasks:  # before any content is read
             check_judge_clearance(setup, task.visibility, f"Task {task.id}")
         models = {spec.label: self._judge_model(spec) for spec in setup.models}
+        archive_judge_prompt(self.root, setup.prompt)  # rebuildable later (ADR-0003)
         family = any(same_family(spec, candidate.tool) for spec in setup.models)
         judged = []
         for task in tasks:
@@ -767,6 +777,7 @@ class Workspace:
         for item in items:
             check_judge_clearance(setup, item.visibility, f"calibration item {item.id}")
         models = {spec.label: self._judge_model(spec) for spec in setup.models}
+        archive_judge_prompt(self.root, setup.prompt)
         judged = []
         for item in items:
             judging = _judging(cal.blind(item.id), setup, models, same_family=False,
@@ -814,7 +825,9 @@ class Workspace:
             )
         if not self.judge_certified:
             item_ids = tuple(i.id for i in self.calibration_set.items())
-            log_certification(self.root, on or self.clock.today(), setup, agreement, item_ids)
+            archive_judge_prompt(self.root, setup.prompt)
+            log_certification(self.root, on or self.clock.today(), setup, agreement, item_ids,
+                              archive_rubric(self.root, self.rubric))
         return agreement
 
     def _require_judge_setup(self) -> JudgeSetup:
@@ -906,6 +919,49 @@ class Workspace:
         changes = {k: v for k, v in given.items() if v is not None}
         self.judge_setup = edit_judge_setup(self.root, changes, prompt)
         return self.judge_setup
+
+    def update_rubric(self, criteria: Iterable[Mapping[str, Any]]) -> Rubric:
+        """Replace the shared Rubric's Criteria, each {id, name, description}, in order:
+        adding, editing or removing a shared Criterion (story 63).
+
+        Validated as on load (ConfigError naming the field), and every Task must still
+        load with it: a change that would leave a Task invalid, such as a shared Criterion
+        a Task already defines, raises ConfigEditRefused naming the Tasks. Either way
+        nothing is written. The Rubric being replaced is archived by hash first, so a Run
+        keeps scoring on the Rubric it started with (ADR-0003).
+        """
+        rubric = parse_rubric_edit(list(criteria))
+        ctx = TaskContext(self.root, self.settings.private_roots, rubric, self.settings.tracks)
+        try:
+            load_tasks(ctx)
+        except ConfigError as exc:
+            raise ConfigEditRefused(
+                RUBRIC_FILE, "criteria", f"would leave a Task invalid: {exc}"
+            ) from None
+        archive_rubric(self.root, self.rubric)
+        write_rubric(self.root, rubric)
+        self.rubric = rubric
+        self._reload_tasks()
+        return rubric
+
+    def run_rubric(self, run: Run) -> Rubric | None:
+        """The shared Rubric the Run was started on, rebuilt from the archive
+        (ADR-0003); None for a Run started before Runs recorded it."""
+        return None if run.rubric_hash is None else self.archived_rubric(run.rubric_hash)
+
+    def run_judge_prompt(self, run: Run) -> str | None:
+        """The judge prompt that scored the Run, rebuilt from the archive (ADR-0003);
+        None until it is judged."""
+        digest = run.judge_prompt_hash
+        return None if digest is None else self.archived_judge_prompt(digest)
+
+    def archived_rubric(self, digest: str) -> Rubric | None:
+        """A shared Rubric by its hash, as a Run or a Certification records it."""
+        return archived_rubric(self.root, digest)
+
+    def archived_judge_prompt(self, digest: str) -> str | None:
+        """A judge prompt's text by its hash, as a Run or a Certification records it."""
+        return archived_judge_prompt(self.root, digest)
 
     def _tracks_in_use(self) -> dict[str, list[str]]:
         """Each Track a loaded Task or a Run's Task version declares -> what declares it."""

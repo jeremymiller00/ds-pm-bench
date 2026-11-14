@@ -25,6 +25,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from bench.core.archive import archive_judge_prompt, content_hash
 from bench.core.errors import JudgeClearanceError, JudgeReplyError
 from bench.core.fields import FieldReader
 from bench.core.kinds import Clearance, JudgeMode, Provider, Visibility
@@ -83,12 +84,18 @@ class JudgeSetup:
         canonical = json.dumps(content, sort_keys=True, separators=(",", ":"))
         return hashlib.sha256(canonical.encode()).hexdigest()[:16]
 
+    @property
+    def prompt_hash(self) -> str:
+        """The judge prompt's content hash, its name in the archive (ADR-0003)."""
+        return content_hash(self.prompt)
+
     def snapshot(self) -> dict[str, Any]:
-        """What a Run records of the Judge Setup that scored it."""
+        """What a Run or a Certification records of the Judge Setup it used."""
         return {
             "hash": self.hash,
             "mode": str(self.mode),
             "models": self._model_identities(),
+            "prompt_hash": self.prompt_hash,
         }
 
     def _model_identities(self) -> list[dict[str, str]]:
@@ -230,6 +237,8 @@ def edit_judge_setup(
         path = (root / setup.prompt_file).resolve()
         if not path.is_relative_to(root.resolve()):
             raise f.fail("prompt", f"{setup.prompt_file} is outside the Workspace root")
+        if path.is_file():  # keep the text being replaced (ADR-0003)
+            archive_judge_prompt(root, path.read_text())
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(prompt)
     f.write(root, data)

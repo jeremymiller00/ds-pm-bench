@@ -2,6 +2,7 @@
 
 runs/<date>-<candidate>/ in the public repo holds:
   run.yaml              the snapshot: Candidate, Task versions, date, Suite, the
+                        shared Rubric's hash (rubric_hash), the
                         Tasks left out of the Suite as placeholders (excluded), and
                         started: the Run's place in the order Runs were started
   results/<task>.yaml   numbers only per Task (timings, cost, Edit Distance, Criterion
@@ -17,12 +18,13 @@ from __future__ import annotations
 
 import datetime
 from collections.abc import Mapping
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
 import yaml
 
+from bench.core.archive import archived_rubric, rubric_hash
 from bench.core.candidates import Candidate
 from bench.core.errors import (
     ClearanceError,
@@ -41,7 +43,7 @@ from bench.core.judging import JUDGE_FOLDER, JudgeSetup, TaskJudging
 from bench.core.kinds import Clearance, Suite, Visibility
 from bench.core.lookup import find_by_id
 from bench.core.results import TaskResult
-from bench.core.rubric import check_criterion_score
+from bench.core.rubric import Rubric, check_criterion_score
 from bench.core.tasks import Task, TaskContext, load_version
 
 RUNS_FOLDER = "runs"
@@ -171,6 +173,17 @@ class Run:
             check_criterion_score(value, f"Task {task.id}: {cid}")
         task_record["criterion_scores"] = dict(scores)
         self._write_task_record(task.id, task_record)
+
+    @property
+    def rubric_hash(self) -> str | None:
+        """The hash of the shared Rubric the Run was started on (ADR-0003); None for a
+        Run started before it was recorded."""
+        return self._snapshot().get("rubric_hash")
+
+    @property
+    def judge_prompt_hash(self) -> str | None:
+        """The hash of the judge prompt that scored this Run; None until it is judged."""
+        return (self._snapshot().get("judge_setup") or {}).get("prompt_hash")
 
     @property
     def judge_setup_hash(self) -> str | None:
@@ -570,6 +583,7 @@ def create_run(
     suite: Suite,
     tasks: tuple[Task, ...],
     date: datetime.date,
+    rubric_hash: str,
 ) -> Run:
     check_gate(candidate)
     for task in tasks:
@@ -590,7 +604,8 @@ def create_run(
         started=started,
     )
     run.folder.mkdir(parents=True)
-    (run.folder / RUN_FILE).write_text(yaml.safe_dump(_snapshot(run), sort_keys=False))
+    snapshot = {**_snapshot(run), "rubric_hash": rubric_hash}
+    (run.folder / RUN_FILE).write_text(yaml.safe_dump(snapshot, sort_keys=False))
     return run
 
 
@@ -669,6 +684,17 @@ def task_versions_used(workspace_root: Path) -> set[tuple[str, int]]:
     return used
 
 
+def _shared_rubric(ctx: TaskContext, run_id: str, digest: str | None) -> Rubric | None:
+    """The archived shared Rubric a Run started on, when it differs from the current
+    one; None when it is the current one or was not recorded."""
+    if digest is None or digest == rubric_hash(ctx.shared):
+        return None
+    archived = archived_rubric(ctx.workspace_root, digest)
+    if archived is None:
+        raise RunMismatch(f"Run {run_id} used shared Rubric {digest}, which is not archived")
+    return archived
+
+
 def open_run(
     ctx: TaskContext,
     run_id: str,
@@ -679,11 +705,14 @@ def open_run(
 
     A Task since bumped is loaded at the version the Run used, from its archive. A Run
     still unfinished is refused instead: it must finish on the versions it started with.
+    Its Tasks' Rubrics use the shared Rubric it was started on, from the archive when
+    the Rubric has changed since.
     """
     folder = ctx.workspace_root / RUNS_FOLDER / run_id
     if not (folder / RUN_FILE).is_file():
         raise UnknownRunError(f"no Run {run_id!r} in {RUNS_FOLDER}/")
     snapshot = yaml.safe_load((folder / RUN_FILE).read_text())
+    shared = _shared_rubric(ctx, run_id, snapshot.get("rubric_hash"))
     snapped = snapshot["candidate"]
     candidate = candidates.get(snapped["id"])
     if candidate is None or _candidate_snapshot(candidate) != snapped:
@@ -703,6 +732,8 @@ def open_run(
         if used is not task:
             bumped.append(f"Task {task_id} version {version} is now version {task.version}")
         check_clearance(candidate, used)
+        if shared is not None:
+            used = replace(used, rubric=Rubric(criteria=shared.criteria + used.own_criteria))
         tasks.append(used)
     run = Run(
         id=run_id,

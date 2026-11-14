@@ -52,6 +52,21 @@ def load_rubric(root: Path) -> Rubric:
     return Rubric(criteria=parse_criteria(f, f.read(root).get("criteria"), "criteria"))
 
 
+def parse_rubric_edit(criteria: Any) -> Rubric:
+    """The shared Rubric criteria would make, validated as on load (ConfigError naming
+    the field); nothing is written."""
+    f = FieldReader(RUBRIC_FILE)
+    entries = [dict(c) for c in criteria] if isinstance(criteria, (list, tuple)) else criteria
+    return Rubric(criteria=parse_criteria(f, entries, "criteria"))
+
+
+def write_rubric(root: Path, rubric: Rubric) -> None:
+    """Write the shared Rubric back, keeping the file's comments (ADR-0001)."""
+    FieldReader(RUBRIC_FILE).write(
+        root, {"criteria": [criterion_dict(c) for c in rubric.criteria]}
+    )
+
+
 def parse_criteria(f: FieldReader, value: Any, field: str) -> tuple[Criterion, ...]:
     """Parse a non-empty list of Criteria with unique ids. Reused by task rubrics."""
     if not isinstance(value, list) or not value:

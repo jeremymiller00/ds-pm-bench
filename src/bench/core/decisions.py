@@ -86,14 +86,17 @@ def log_certification(
     setup: JudgeSetup,
     agreement: Agreement,
     item_ids: tuple[str, ...],
+    rubric_hash: str,
 ) -> Path:
-    """Log a Judge Setup's Certification on the Calibration Set (ADR-0002)."""
+    """Log a Judge Setup's Certification on the Calibration Set (ADR-0002), with the
+    hashes of the judge prompt and shared Rubric it used (ADR-0003)."""
     return _append(root, date, f"judge-{setup.hash}", {
         "kind": str(EntryKind.JUDGE_CERTIFICATION),
         "date": date.isoformat(),
         "judge_setup_hash": setup.hash,
         "judge_setup": setup.snapshot(),
         "clearance": str(setup.clearance),
+        "rubric_hash": rubric_hash,
         "items": list(item_ids),
         "within_one_point": agreement.overall.within_one_point,
         "weighted_kappa": agreement.overall.weighted_kappa,

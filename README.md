@@ -205,6 +205,18 @@ Setup). A judge model that is the model the Candidate calls (same
 provider and model id) is refused, and a same-family judge model marks Tasks for a full
 human check. Every refusal is a `JudgingError`.
 
+### Archived judge prompts and Rubrics
+
+Before the judge prompt or the shared Rubric is replaced, and whenever a Run, a
+Calibration judging or a Certification uses one, its text is kept under its content
+hash in `config/archive/judge-prompts/` and `config/archive/rubrics/` (ADR 0003). A
+Run records `rubric_hash` and its Judge Setup's `prompt_hash`, and a Certification
+both, so `Workspace.run_rubric(run)` and `run_judge_prompt(run)` rebuild what scored a
+past Run from the repo alone, committed or not. A Run keeps scoring on the Rubric it
+started with. `Workspace.update_rubric(criteria)` adds, edits or removes shared
+Criteria (also in the TUI's Settings tab), refusing a change that would leave a Task
+invalid, such as a shared Criterion a Task already defines.
+
 ### Calibration and Certification
 
 The Calibration Set (`calibration/`) holds final Outputs of finished Runs, Spot-checked
