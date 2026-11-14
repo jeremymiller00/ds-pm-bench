@@ -28,6 +28,9 @@ dev = [
 testpaths = ["tests"]
 addopts = "-ra"
 asyncio_mode = "auto"
+markers = [
+    "live: opt-in smoke test calling a real provider API (needs BENCH_LIVE=1 and a key)",
+]
 
 [project.scripts]
 bench = "bench.cli:main"

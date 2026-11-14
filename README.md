@@ -39,6 +39,24 @@ Answer, Manual Time and Canonical Prompt start as placeholders (`TODO`), so the
 harness will not Run a Task until all four are filled in. It refuses, writing
 nothing, if any catalog Task already exists.
 
+### Automated Candidates
+
+An `automated` Candidate is called through the Anthropic or OpenAI Python SDK.
+`settings.provider` (`anthropic` or `openai`) may be left out when the tool is Claude,
+Anthropic, OpenAI, ChatGPT or GPT; the model id is `settings.model`, else the
+Candidate's `version`. `settings.max_tokens` and `settings.temperature` are passed on.
+The API key is read from the first name in `env_vars`, from the environment or else a
+git-ignored `.env` at the repo root (ADR 0005). Prices come from `config/prices.yaml`,
+keyed by model id; a model with no price gets a null cost.
+
+`Workspace.run_automated_task(run, task_id)` sends one Task, retrying once on a tool
+error, and stores the raw Output pending its edit pass. The live smoke tests are
+skipped unless you opt in:
+
+```sh
+BENCH_LIVE=1 ANTHROPIC_API_KEY=... BENCH_LIVE_ANTHROPIC_MODEL=<model id> uv run pytest -m live
+```
+
 In the TUI's Tasks tab, `e` edits the highlighted Task and `n` scaffolds a new one
 (private only when a private root is configured); `ctrl+s` saves, `escape` cancels.
 Saving shows the Task's version, and whether the edit made a new one because a Run
