@@ -15,6 +15,7 @@ from bench import (
     Workspace,
 )
 from bench.core.kinds import Suite
+from test_workspace_attempts import FakeClock
 from test_workspace_candidates import candidate, write_candidate
 from test_workspace_tasks import configure_private_root, write_task
 
@@ -484,3 +485,11 @@ def test_a_candidate_without_a_passing_gate_may_run_no_suite(ws_dir: Path):
     write_candidate(ws_dir, "other@1", candidate(gate=None))
 
     assert Workspace.open(ws_dir).suites_for("other@1") == ()
+
+
+def test_a_run_is_dated_today_by_the_workspace_clock(workspace_dir: Path):
+    write_task(workspace_dir, "T1.1")
+    write_candidate(workspace_dir, "claude@opus-5-5", cleared("public_only", baseline=True))
+    ws = Workspace.open(workspace_dir, clock=FakeClock(today=datetime.date(2027, 2, 3)))
+
+    assert ws.start_run("claude@opus-5-5").date == datetime.date(2027, 2, 3)

@@ -1,12 +1,14 @@
 """Textual pilot tests for the Candidates tab, on fixture Workspaces in temp dirs."""
 
+import datetime
 from pathlib import Path
 
-from textual.widgets import DataTable, Static, TabbedContent, TextArea
+from textual.widgets import DataTable, Input, Static, TabbedContent, TextArea
 
 from bench import Workspace
 from bench.tui.app import BenchApp
 from bench.tui.candidate_editor import GateScreen, NewCandidateScreen
+from test_workspace_attempts import FakeClock
 from test_workspace_candidates import candidate, write_candidate
 
 
@@ -193,3 +195,18 @@ async def test_an_invalid_gate_is_shown_inline_and_changes_nothing(workspace_dir
     ws = Workspace.open(workspace_dir)
     assert ws.candidate("claude@opus-5-5").gate is None
     assert ws.decision_log() == ()
+
+
+async def test_a_gate_review_is_dated_today_by_the_workspace_clock(workspace_dir: Path):
+    write_candidate(workspace_dir, "claude@opus-5-5", candidate(baseline=True))
+    clock = FakeClock(today=datetime.date(2027, 2, 3))
+
+    app = BenchApp(Workspace.open(workspace_dir, clock=clock))
+    async with app.run_test() as pilot:
+        await open_candidates(app, pilot)
+        await pilot.press("g")
+        await pilot.pause()
+        shown = app.screen.query_one("#gate-date", Input).value
+
+    assert shown == "2027-02-03"
+

@@ -113,7 +113,7 @@ class GateScreen(ModalScreen[GateRecorded | None]):
             yield Label("Reviewer")
             yield Input(id="gate-reviewer")
             yield Label("Date (YYYY-MM-DD)")
-            yield Input(datetime.date.today().isoformat(), id="gate-date")
+            yield Input(self.workspace.clock.today().isoformat(), id="gate-date")
             yield Label("Retention")
             yield Input(id="gate-retention")
             yield Checkbox("SSO", id="gate-sso")

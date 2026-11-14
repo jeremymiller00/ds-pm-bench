@@ -16,11 +16,15 @@ CANDIDATE = "chatbot@web-1"
 class FakeClock:
     """A clock that only moves when the test says so."""
 
-    def __init__(self) -> None:
+    def __init__(self, today: datetime.date = DAY) -> None:
         self.seconds = 1000.0
+        self.date = today
 
     def now(self) -> float:
         return self.seconds
+
+    def today(self) -> datetime.date:
+        return self.date
 
     def advance(self, seconds: float) -> None:
         self.seconds += seconds

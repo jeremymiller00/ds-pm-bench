@@ -6,6 +6,7 @@ person's $EDITOR.
 
 from __future__ import annotations
 
+import datetime
 import os
 import shlex
 import subprocess
@@ -16,9 +17,13 @@ from typing import Protocol
 
 
 class Clock(Protocol):
-    """Seconds on a monotonic scale; only differences between readings mean anything."""
+    """Time for the harness: now() is seconds on a monotonic scale, where only
+    differences between readings mean anything; today() is the date that dates a Run,
+    a Gate review or a Decision Log entry when none is given."""
 
     def now(self) -> float: ...
+
+    def today(self) -> datetime.date: ...
 
 
 class Editor(Protocol):
@@ -30,6 +35,9 @@ class Editor(Protocol):
 class SystemClock:
     def now(self) -> float:
         return time.monotonic()
+
+    def today(self) -> datetime.date:
+        return datetime.date.today()
 
 
 class ExternalEditor:
