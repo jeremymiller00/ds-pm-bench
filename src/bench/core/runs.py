@@ -46,6 +46,8 @@ RUNS_FOLDER = "runs"
 RUN_FILE = "run.yaml"
 RESULTS_FOLDER = "results"
 JUDGE_FOLDER = "judge"
+# run.yaml key: the Spot-check queue, Task id -> Track, saved once the Run is judged.
+SPOT_CHECK_QUEUE = "spot_check_queue"
 
 # What a results file (the input to record_from_file) may hold.
 RESULTS_FILE_FIELDS = (
@@ -315,6 +317,33 @@ class Run:
         )
 
     @property
+    def spot_check_queue(self) -> tuple[str, ...]:
+        """Task ids queued for a human Spot-check, in Suite order; empty until judged."""
+        return tuple(self._snapshot().get(SPOT_CHECK_QUEUE) or {})
+
+    def queue_spot_checks(self, task_ids: tuple[str, ...]) -> None:
+        """Save the Spot-check queue with each Task's Track. Set once: a Run that already
+        has one keeps it, so the queue is never resampled."""
+        snapshot = self._snapshot()
+        if snapshot.get(SPOT_CHECK_QUEUE) is not None:
+            return
+        snapshot[SPOT_CHECK_QUEUE] = {t: self.task(t).track for t in task_ids}
+        self._write_snapshot(snapshot)
+
+    @property
+    def spot_checks_left(self) -> dict[str, tuple[str, ...]]:
+        """Queued Task id -> the Criteria a human has not scored yet, for Tasks with any
+        left. Blind: holds no Judge scores."""
+        left = {}
+        for task_id in self.spot_check_queue:
+            task = self.task(task_id)
+            checked = (self._task_record(task_id) or {}).get("spot_checks", {})
+            criteria = tuple(c.id for c in task.rubric.criteria if c.id not in checked)
+            if criteria:
+                left[task_id] = criteria
+        return left
+
+    @property
     def spot_checks(self) -> tuple[SpotCheck, ...]:
         """Every Spot-check recorded on this Run, in Suite order."""
         checks = []
@@ -581,6 +610,23 @@ def list_run_ids(workspace_root: Path) -> tuple[str, ...]:
     """Every Run id under runs/, newest first (ids start with the Run's date)."""
     paths = (workspace_root / RUNS_FOLDER).glob(f"*/{RUN_FILE}")
     return tuple(sorted((p.parent.name for p in paths), reverse=True))
+
+
+def tracks_spot_checked_before(workspace_root: Path, run: Run) -> frozenset[str]:
+    """The Tracks queued for a Spot-check in the same Candidate's previous Run (the
+    latest earlier one with a queue); empty when there is none."""
+    for run_id in list_run_ids(workspace_root):  # newest first
+        snapshot = yaml.safe_load(
+            (workspace_root / RUNS_FOLDER / run_id / RUN_FILE).read_text()
+        ) or {}
+        if (snapshot.get("candidate") or {}).get("id") != run.candidate_id:
+            continue
+        if datetime.date.fromisoformat(snapshot["date"]) >= run.date:
+            continue
+        queue = snapshot.get(SPOT_CHECK_QUEUE)
+        if queue is not None:
+            return frozenset(queue.values())
+    return frozenset()
 
 
 def task_versions_used(workspace_root: Path) -> set[tuple[str, int]]:

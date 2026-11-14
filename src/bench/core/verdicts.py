@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from bench.core.candidates import Candidate
-from bench.core.errors import SuiteMismatch
+from bench.core.errors import SpotChecksUnfinished, SuiteMismatch
 from bench.core.kinds import Suite, Visibility
 from bench.core.runs import Run, SpotCheck
 from bench.core.scoring import RunScore
@@ -76,6 +76,7 @@ def compare(
             f"Run {baseline.id} is of {baseline.candidate_id}, not the Baseline"
         )
     check_same_suite(challenger, baseline)
+    check_spot_checks_finished(challenger, baseline)
     worst = max(
         challenger.spot_checks + baseline.spot_checks, key=lambda c: c.gap, default=None
     )
@@ -148,6 +149,22 @@ def check_same_suite(challenger: Run, baseline: Run) -> None:
         f"Runs {challenger.id} and {baseline.id} cover different Suites "
         f"(challenger vs Baseline Task version): {'; '.join(differences)}"
     )
+
+
+def check_spot_checks_finished(*runs: Run) -> None:
+    """Refuse a Verdict while any Run has queued Spot-checks a human has not finished:
+    a Verdict is never computed on unchecked judging (SpotChecksUnfinished)."""
+    unfinished = [
+        f"Run {run.id}: "
+        + "; ".join(f"{t} ({', '.join(c)})" for t, c in run.spot_checks_left.items())
+        for run in runs
+        if run.spot_checks_left
+    ]
+    if unfinished:
+        raise SpotChecksUnfinished(
+            "Spot-checks are unfinished, so no Verdict yet; score the Criteria left: "
+            + " | ".join(unfinished)
+        )
 
 
 def apply_adopt_rule(

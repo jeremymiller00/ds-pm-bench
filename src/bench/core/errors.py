@@ -82,6 +82,11 @@ class SuiteMismatch(Exception):
     """Two Runs cannot be compared: they do not cover the same Tasks at the same versions."""
 
 
+class SpotChecksUnfinished(Exception):
+    """A Comparison refuses to reach a Verdict while either Run has queued Spot-checks a
+    human has not finished: a Verdict is never computed on unchecked judging."""
+
+
 class JudgingError(Exception):
     """Judging a Run was refused or failed; every judging error is one of these."""
 
