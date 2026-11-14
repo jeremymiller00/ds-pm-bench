@@ -129,8 +129,7 @@ async def test_shell_opens_on_tasks_with_the_later_sections_as_placeholders(
         await pilot.click("#--content-tab-calibration")
         await pilot.pause()
         assert sections.active == "calibration"
-        placeholder = sections.query_one("#calibration Static", Static)
-        assert "not built yet" in str(placeholder.content)
+        assert sections.query_one("#calibration #cal-setup", Static)
 
 
 @pytest.mark.parametrize("args", [[], ["tui"]])

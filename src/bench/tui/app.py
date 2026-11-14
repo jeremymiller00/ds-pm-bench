@@ -9,6 +9,7 @@ from textual.app import App, ComposeResult
 from textual.widgets import Footer, Header, Static, TabbedContent, TabPane
 
 from bench.core.workspace import Workspace
+from bench.tui.calibration import CalibrationPane
 from bench.tui.candidates import CandidateBrowser
 from bench.tui.comparisons import ComparisonsPane, DecisionLogPane
 from bench.tui.runs import RunsPane
@@ -23,6 +24,7 @@ PLACEHOLDER_SECTIONS = (
 )
 # Sections built so far among those above: pane id -> the widget it shows.
 BUILT_SECTIONS = {
+    "calibration": CalibrationPane,
     "comparisons": ComparisonsPane,
     "decision-log": DecisionLogPane,
 }
