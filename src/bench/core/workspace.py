@@ -12,7 +12,7 @@ from bench.core.candidates import Candidate, load_candidates
 from bench.core.catalog import CATALOG
 from bench.core.decisions import log_verdict, read_log
 from bench.core.errors import TaskNotRunnable, UnknownCandidateError, UnknownTaskError
-from bench.core.kinds import Suite, Visibility
+from bench.core.kinds import Suite
 from bench.core.lookup import find_by_id
 from bench.core.prices import PriceTable, load_prices
 from bench.core.results import TaskResult
@@ -30,9 +30,10 @@ from bench.core.runs import (
 from bench.core.scoring import RunScore, score_run
 from bench.core.settings import Settings, load_settings
 from bench.core.tasks import (
-    PRIVATE_TASK_FOLDER,
     CriterionSpec,
     Task,
+    TaskContext,
+    TaskRoot,
     edit_task,
     load_tasks,
     scaffold_task,
@@ -56,14 +57,21 @@ class Workspace:
         root = Path(path).resolve()
         settings = load_settings(root)
         rubric = load_rubric(root)
+        ctx = TaskContext(root, settings.private_roots, rubric, settings.tracks)
         return cls(
             root=root,
             settings=settings,
             rubric=rubric,
             prices=load_prices(root),
-            tasks=load_tasks(root, settings.private_roots, rubric, settings.tracks),
+            tasks=load_tasks(ctx),
             candidates=load_candidates(root),
         )
+
+    @property
+    def task_context(self) -> TaskContext:
+        """What loading, scaffolding or editing a Task needs from this Workspace."""
+        return TaskContext(self.root, self.settings.private_roots, self.rubric,
+                           self.settings.tracks)
 
     def task(self, task_id: str) -> Task:
         task = find_by_id(self.tasks, task_id)
@@ -94,21 +102,17 @@ class Workspace:
         """
         if find_by_id(self.tasks, task_id) is not None:
             raise ValueError(f"Task {task_id} already exists in {self.task(task_id).folder}")
-        root, visibility = self.root, Visibility.PUBLIC
-        if private_root is not None:
-            root, visibility = self._private_root(private_root), Visibility.PRIVATE
+        ctx = self.task_context
+        root = ctx.public_root if private_root is None else self._private_root(private_root)
         task = scaffold_task(
-            self.root,
+            ctx,
             root,
-            visibility,
             task_id,
             track=track,
             trap=trap,
             canonical_prompt=canonical_prompt,
             criteria=criteria,
             manual_time_minutes=manual_time_minutes,
-            shared=self.rubric,
-            tracks=self.settings.tracks,
         )
         self._reload_tasks()
         return task
@@ -124,12 +128,10 @@ class Workspace:
         """
         task = self.task(task_id)
         edited = edit_task(
-            self.root,
+            self.task_context,
             task,
             changes,
             used=(task.id, task.version) in task_versions_used(self.root),
-            shared=self.rubric,
-            tracks=self.settings.tracks,
         )
         self._reload_tasks()
         return edited
@@ -146,30 +148,28 @@ class Workspace:
             entry.id
             for entry in CATALOG
             if find_by_id(self.tasks, entry.id) is not None
-            or (root / PRIVATE_TASK_FOLDER / entry.id).exists()
+            or (root.tasks_folder / entry.id).exists()
         ]
         if clashes:
             raise ValueError(
                 f"catalog Tasks already exist, not overwriting: {', '.join(clashes)}"
             )
         return tuple(
-            self.create_task(entry.id, private_root=root, **entry.create_args())
+            self.create_task(entry.id, private_root=root.path, **entry.create_args())
             for entry in CATALOG
         )
 
-    def _private_root(self, path: str | Path) -> Path:
+    def _private_root(self, path: str | Path) -> TaskRoot:
         resolved = (self.root / Path(path).expanduser()).resolve()
         if resolved not in self.settings.private_roots:
             configured = ", ".join(map(str, self.settings.private_roots)) or "none"
             raise ValueError(
                 f"{resolved} is not a configured private root (configured: {configured})"
             )
-        return resolved
+        return self.task_context.private_root(resolved)
 
     def _reload_tasks(self) -> None:
-        self.tasks = load_tasks(
-            self.root, self.settings.private_roots, self.rubric, self.settings.tracks
-        )
+        self.tasks = load_tasks(self.task_context)
 
     def runnable_task(self, task_id: str) -> Task:
         """The Task; TaskNotRunnable if its input, Gold Answer or Manual Time is a placeholder."""

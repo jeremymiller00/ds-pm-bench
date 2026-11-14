@@ -10,6 +10,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from bench.core.rubric import Criterion, criterion_dict
+
 
 @dataclass(frozen=True)
 class CatalogTask:
@@ -19,7 +21,7 @@ class CatalogTask:
     input: str
     expected_output: str
     trap: str
-    criteria: tuple[dict[str, str], ...]  # the task-specific Criteria, one or two
+    criteria: tuple[Criterion, ...]  # the task-specific Criteria, one or two
 
     @property
     def canonical_prompt(self) -> str:
@@ -36,12 +38,8 @@ class CatalogTask:
             track=self.track,
             trap=self.trap,
             canonical_prompt=self.canonical_prompt,
-            criteria=self.criteria,
+            criteria=[criterion_dict(c) for c in self.criteria],
         )
-
-
-def _criterion(id: str, name: str, description: str) -> dict[str, str]:
-    return {"id": id, "name": name, "description": description}
 
 
 CATALOG: tuple[CatalogTask, ...] = (
@@ -53,12 +51,12 @@ CATALOG: tuple[CatalogTask, ...] = (
         "AI Project Template: input/output, data, dependencies, success criteria.",
         "The ask states no success metric; the Output must flag it, not invent one.",
         (
-            _criterion(
+            Criterion(
                 "flags_missing_metric",
                 "Flags the missing metric",
                 "Names the absent success metric as an open question instead of inventing one.",
             ),
-            _criterion(
+            Criterion(
                 "template_complete",
                 "Template complete",
                 "Covers input/output, data, dependencies and success criteria.",
@@ -73,12 +71,12 @@ CATALOG: tuple[CatalogTask, ...] = (
         "A four-lens assessment (value, viability, feasibility, usability) with go/no-go.",
         "Feasibility is blocked by missing labeled data.",
         (
-            _criterion(
+            Criterion(
                 "four_lenses_assessed",
                 "Four lenses assessed",
                 "Assesses value, viability, feasibility and usability, each with evidence.",
             ),
-            _criterion(
+            Criterion(
                 "catches_feasibility_blocker",
                 "Catches the feasibility blocker",
                 "Spots the missing labeled data and lets it drive the go/no-go call.",
@@ -93,12 +91,12 @@ CATALOG: tuple[CatalogTask, ...] = (
         "Target variable, unit of prediction and baseline.",
         "The problem is better solved without ML.",
         (
-            _criterion(
+            Criterion(
                 "data_framing",
                 "Data framing",
                 "Defines the target variable, unit of prediction and baseline.",
             ),
-            _criterion(
+            Criterion(
                 "questions_need_for_ml",
                 "Questions the need for ML",
                 "Recognizes when a simpler non-ML solution fits better and says so.",
@@ -113,12 +111,12 @@ CATALOG: tuple[CatalogTask, ...] = (
         "Product intent plus structured acceptance criteria.",
         "The input holds conflicting constraints.",
         (
-            _criterion(
+            Criterion(
                 "testable_acceptance_criteria",
                 "Testable acceptance criteria",
                 "Acceptance criteria are structured, specific and testable.",
             ),
-            _criterion(
+            Criterion(
                 "surfaces_conflicts",
                 "Surfaces conflicting constraints",
                 "Names the conflicting constraints and asks for a decision rather than "
@@ -134,12 +132,12 @@ CATALOG: tuple[CatalogTask, ...] = (
         "Jira-ready tickets with acceptance criteria and dependencies.",
         "A hidden dependency on another team.",
         (
-            _criterion(
+            Criterion(
                 "ticket_ready",
                 "Tickets ready to pick up",
                 "Each ticket has a clear scope, acceptance criteria and dependencies.",
             ),
-            _criterion(
+            Criterion(
                 "finds_hidden_dependency",
                 "Finds the hidden dependency",
                 "Identifies the dependency on another team and makes it explicit.",
@@ -154,12 +152,12 @@ CATALOG: tuple[CatalogTask, ...] = (
         "A gap list plus a rewritten ticket.",
         "The success criteria are ambiguous.",
         (
-            _criterion(
+            Criterion(
                 "gap_list",
                 "Gap list",
                 "Lists the ticket's real gaps, starting with the ambiguous success criteria.",
             ),
-            _criterion(
+            Criterion(
                 "rewrite_resolves_gaps",
                 "Rewrite resolves the gaps",
                 "The rewritten ticket has unambiguous, measurable success criteria.",
@@ -174,12 +172,12 @@ CATALOG: tuple[CatalogTask, ...] = (
         "A ranked list scored on value vs. likelihood of success.",
         "One item looks high-value but has no owner.",
         (
-            _criterion(
+            Criterion(
                 "value_vs_likelihood",
                 "Value vs. likelihood of success",
                 "Value vs. likelihood of success is explicit for every item.",
             ),
-            _criterion(
+            Criterion(
                 "flags_unowned_item",
                 "Flags the unowned item",
                 "Calls out the high-value item with no owner instead of ranking it blindly.",
@@ -194,12 +192,12 @@ CATALOG: tuple[CatalogTask, ...] = (
         "A decision log entry: decision, options, rationale, owner, date.",
         "The thread ends without a clear decision.",
         (
-            _criterion(
+            Criterion(
                 "entry_complete",
                 "Entry complete",
                 "Records decision, options, rationale, owner and date.",
             ),
-            _criterion(
+            Criterion(
                 "no_invented_decision",
                 "No invented decision",
                 "States that no clear decision was reached rather than inventing one.",
@@ -214,12 +212,12 @@ CATALOG: tuple[CatalogTask, ...] = (
         "An updated ranking plus what moved and why.",
         "The change should demote a pet project.",
         (
-            _criterion(
+            Criterion(
                 "explains_moves",
                 "Explains what moved",
                 "Says what moved in the ranking and why, tied to the change.",
             ),
-            _criterion(
+            Criterion(
                 "demotes_on_evidence",
                 "Demotes on evidence",
                 "Demotes the pet project when the change calls for it.",
@@ -234,12 +232,12 @@ CATALOG: tuple[CatalogTask, ...] = (
         "A PR FAQ: product, customer, problem, benefits, quote.",
         "No real exec quote is supplied; the Output must not fabricate one.",
         (
-            _criterion(
+            Criterion(
                 "pr_faq_complete",
                 "PR FAQ complete",
                 "Covers product, intended customer, problem, benefits and quote.",
             ),
-            _criterion(
+            Criterion(
                 "no_fabricated_quote",
                 "No fabricated quote",
                 "Leaves a marked placeholder for the quote instead of fabricating one.",
@@ -254,12 +252,12 @@ CATALOG: tuple[CatalogTask, ...] = (
         "Jobs to be done, struggle points and themes with evidence.",
         "A minority view that matters.",
         (
-            _criterion(
+            Criterion(
                 "evidence_backed_themes",
                 "Evidence-backed themes",
                 "Jobs to be done, struggle points and themes each cite interview evidence.",
             ),
-            _criterion(
+            Criterion(
                 "keeps_minority_view",
                 "Keeps the minority view",
                 "Surfaces the minority view that matters instead of averaging it away.",
@@ -274,12 +272,12 @@ CATALOG: tuple[CatalogTask, ...] = (
         "A goal plus a numbered agenda toward one decision.",
         "Too many topics for 30 minutes.",
         (
-            _criterion(
+            Criterion(
                 "goal_and_decision",
                 "Goal and one decision",
                 "States the goal and builds the numbered agenda toward one decision.",
             ),
-            _criterion(
+            Criterion(
                 "fits_the_timebox",
                 "Fits the timebox",
                 "Cuts or defers topics so the agenda fits in 30 minutes.",

@@ -12,6 +12,8 @@ from textual.screen import ModalScreen
 from textual.widgets import Button, Input, Label, Select, Static, TextArea
 
 from bench.core.errors import ConfigError, TaskEditRefused
+from bench.core.kinds import Visibility
+from bench.core.rubric import criterion_dict
 from bench.core.tasks import Task
 from bench.core.workspace import Workspace
 
@@ -60,13 +62,10 @@ class TaskEditorScreen(ModalScreen[Task | None]):
             yield Label("Gold Answer")
             yield TextArea(task.gold_answer_path.read_text(), id="edit-gold")
             yield Label("Criteria (YAML list of id, name, description)")
-            yield TextArea(criteria_yaml(self._task_criteria(task)), id="edit-criteria")
+            criteria = [criterion_dict(c) for c in task.own_criteria]
+            yield TextArea(criteria_yaml(criteria), id="edit-criteria")
             yield Static("", id="editor-error", markup=False)
             yield Button("Save", id="editor-save", variant="primary")
-
-    def _task_criteria(self, task: Task) -> list[dict[str, str]]:
-        own = task.rubric.criteria[len(self.workspace.rubric.criteria):]
-        return [{"id": c.id, "name": c.name, "description": c.description} for c in own]
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "editor-save":
@@ -92,9 +91,6 @@ class TaskEditorScreen(ModalScreen[Task | None]):
 
     def action_cancel(self) -> None:
         self.dismiss(None)
-
-
-PUBLIC = "public"
 
 
 class NewTaskScreen(ModalScreen[Task | None]):
@@ -123,11 +119,13 @@ class NewTaskScreen(ModalScreen[Task | None]):
                          id="new-track")
             if self.workspace.settings.private_roots:
                 yield Label("Public or private")
-                options = [("Public (tasks/ in this repo)", PUBLIC)] + [
+                options = [("Public (tasks/ in this repo)", str(Visibility.PUBLIC))] + [
                     (f"Private ({root})", str(root))
                     for root in self.workspace.settings.private_roots
                 ]
-                yield Select(options, value=PUBLIC, allow_blank=False, id="new-root")
+                yield Select(
+                    options, value=str(Visibility.PUBLIC), allow_blank=False, id="new-root"
+                )
             yield Label("Id (such as T1.2)")
             yield Input(id="new-id")
             yield Label("Trap")
@@ -147,7 +145,7 @@ class NewTaskScreen(ModalScreen[Task | None]):
 
     def action_save(self) -> None:
         roots = self.query("#new-root")
-        where = roots.first(Select).value if roots else PUBLIC
+        where = roots.first(Select).value if roots else Visibility.PUBLIC
         try:
             task = self.workspace.create_task(
                 self.query_one("#new-id", Input).value.strip(),
@@ -158,7 +156,7 @@ class NewTaskScreen(ModalScreen[Task | None]):
                 manual_time_minutes=parse_minutes(
                     self.query_one("#new-manual-time", Input).value
                 ),
-                private_root=None if where == PUBLIC else str(where),
+                private_root=None if where == Visibility.PUBLIC else str(where),
             )
         except ValueError as error:  # FormError, ConfigError, or a refused id or root
             self.query_one("#new-error", Static).update(str(error))

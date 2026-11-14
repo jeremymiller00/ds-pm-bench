@@ -56,7 +56,7 @@ def test_catalog_tasks_carry_their_trap_and_task_specific_criteria(
     ranking = ws.task("T3.1")
     assert "owner" in ranking.trap
     assert any(
-        "likelihood of success" in c.name.lower() for c in ranking.rubric.criteria[5:]
+        "likelihood of success" in c.name.lower() for c in ranking.own_criteria
     )
     pr_faq = ws.task("T4.1")
     assert "fabricate" in pr_faq.trap
