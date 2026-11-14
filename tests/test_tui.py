@@ -192,3 +192,61 @@ async def test_editing_a_task_a_run_used_saves_a_new_version_and_says_so(
     assert "new version" in status
     task = Workspace.open(workspace_dir).task("T1.1")
     assert (task.version, task.trap) == (2, "Recommends a model before naming the decision.")
+
+
+async def test_editing_a_task_no_run_used_keeps_its_version(workspace_dir: Path):
+    write_task(workspace_dir, "T1.1", gold="TODO")
+
+    app = BenchApp(Workspace.open(workspace_dir))
+    async with app.run_test() as pilot:
+        await open_editor(app, pilot)
+        fill(app, "#edit-gold", "Problem: predict SMB churn 60 days ahead.")
+        await pilot.press("ctrl+s")
+        await pilot.pause()
+        assert tree_outline(app)["Framing (1)"] == ["T1.1  public  v1  ready"]
+        status = str(app.query_one("#task-status", Static).content)
+
+    assert "T1.1 saved as v1 (edited in place)" in status
+
+
+@pytest.mark.parametrize(
+    ("selector", "value", "message"),
+    [
+        ("#edit-manual-time", "-5", "manual_time_minutes"),
+        ("#edit-manual-time", "soon", "Manual Time"),
+        ("#edit-criteria", "- id: Not Snake\n  name: X\n  description: Y\n", "criteria[0].id"),
+        ("#edit-criteria", "[unclosed", "not valid YAML"),
+    ],
+)
+async def test_an_invalid_edit_is_shown_inline_and_changes_nothing(
+    workspace_dir: Path, selector: str, value: str, message: str
+):
+    folder = write_task(workspace_dir, "T1.1")
+    before = (folder / "task.md").read_text()
+
+    app = BenchApp(Workspace.open(workspace_dir))
+    async with app.run_test() as pilot:
+        await open_editor(app, pilot)
+        fill(app, selector, value)
+        await pilot.press("ctrl+s")
+        await pilot.pause()
+        assert isinstance(app.screen, TaskEditorScreen)
+        error = str(app.screen.query_one("#editor-error", Static).content)
+
+    assert message in error
+    assert (folder / "task.md").read_text() == before
+
+
+async def test_cancelling_an_edit_leaves_the_task_as_it_was(workspace_dir: Path):
+    folder = write_task(workspace_dir, "T1.1")
+    before = (folder / "task.md").read_text()
+
+    app = BenchApp(Workspace.open(workspace_dir))
+    async with app.run_test() as pilot:
+        await open_editor(app, pilot)
+        fill(app, "#edit-trap", "Something else.")
+        await pilot.press("escape")
+        await pilot.pause()
+        assert not isinstance(app.screen, TaskEditorScreen)
+
+    assert (folder / "task.md").read_text() == before
