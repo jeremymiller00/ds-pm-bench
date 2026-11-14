@@ -9,10 +9,18 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from bench.core.candidates import Candidate, load_candidates
+from bench.core.candidates import (
+    CANDIDATES_FOLDER,
+    Candidate,
+    candidate_data,
+    candidate_id_for,
+    load_candidates,
+    write_candidate,
+)
 from bench.core.catalog import CATALOG
 from bench.core.decisions import log_verdict, read_log
 from bench.core.errors import (
+    CandidateAuthoringError,
     TaskAuthoringError,
     TaskNotRunnable,
     UnknownCandidateError,
@@ -51,7 +59,7 @@ from bench.core.verdicts import Comparison, Verdict, compare, gate_verdict
 class Workspace:
     """Opened from the repo root holding config/, Tasks, Candidates and Runs.
 
-    tasks is replaced when a Task is created or edited.
+    tasks is replaced when a Task is created or edited, candidates when a Candidate is.
     """
 
     root: Path
@@ -226,6 +234,77 @@ class Workspace:
         if candidate is None:
             raise UnknownCandidateError(f"no Candidate {candidate_id!r} in candidates/")
         return candidate
+
+    def create_candidate(
+        self,
+        *,
+        tool: str,
+        version: str,
+        adapter: str,
+        settings: dict[str, Any] | None = None,
+        env_vars: Iterable[str] = (),
+        cost_per_task_usd: float | None = None,
+        baseline: bool = False,
+    ) -> Candidate:
+        """Write a new Candidate, ungated, to candidates/<tool>@<version>.yaml.
+
+        adapter is "automated" or "manual_assisted"; env_vars are the names of the
+        environment variables holding its secrets, never the values (ADR-0005).
+        cost_per_task_usd is a manual-assisted Candidate's flat cost per Task.
+        baseline=True moves the Baseline mark to it; the first Candidate must be the
+        Baseline. Invalid fields raise ConfigError naming the field; a taken id or a
+        first Candidate that is not the Baseline raises CandidateAuthoringError.
+        Either way nothing is written.
+        """
+        candidate_id = candidate_id_for(tool, version)
+        if find_by_id(self.candidates, candidate_id) is not None or (
+            self.root / CANDIDATES_FOLDER / f"{candidate_id}.yaml"
+        ).exists():
+            raise CandidateAuthoringError(f"Candidate {candidate_id} already exists")
+        if not baseline and self.baseline is None:
+            raise CandidateAuthoringError(
+                f"{candidate_id} would be the first Candidate, so it must be the Baseline"
+            )
+        data: dict[str, Any] = {
+            "tool": tool,
+            "version": version,
+            "adapter": adapter,
+            "settings": {} if settings is None else dict(settings),
+            "env_vars": list(env_vars),
+            "cost_per_task_usd": cost_per_task_usd,
+            "baseline": baseline,
+            "gate": None,
+        }
+        created = write_candidate(self.root, candidate_id, data)
+        if baseline:
+            self._unmark_baselines_except(created.id)
+        self._reload_candidates()
+        return self.candidate(created.id)
+
+    def mark_baseline(self, candidate_id: str) -> Candidate:
+        """Make the Candidate the Baseline, unmarking the previous one.
+
+        The mark is a designation, not part of what a Run freezes, so it moves in place
+        even on a used Candidate.
+        """
+        target = self.candidate(candidate_id)
+        self._write(target, baseline=True)
+        self._unmark_baselines_except(target.id)
+        self._reload_candidates()
+        return self.candidate(candidate_id)
+
+    def _unmark_baselines_except(self, candidate_id: str) -> None:
+        for other in self.candidates:
+            if other.baseline and other.id != candidate_id:
+                self._write(other, baseline=False)
+
+    def _write(self, candidate: Candidate, **changes: Any) -> Candidate:
+        data = candidate_data(candidate)
+        data.update(changes)
+        return write_candidate(self.root, candidate.id, data)
+
+    def _reload_candidates(self) -> None:
+        self.candidates = load_candidates(self.root)
 
     def start_run(
         self,

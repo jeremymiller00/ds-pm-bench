@@ -1,6 +1,7 @@
 """DS PM Benchmark core library."""
 
 from bench.core.errors import (
+    CandidateAuthoringError,
     ClearanceError,
     ConfigError,
     GateNotPassed,
@@ -22,6 +23,7 @@ from bench.core.verdicts import Comparison, Verdict
 from bench.core.workspace import Workspace
 
 __all__ = [
+    "CandidateAuthoringError",
     "Comparison",
     "ClearanceError",
     "ConfigError",

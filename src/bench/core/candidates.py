@@ -1,7 +1,9 @@
 """Candidates: candidates/<tool>@<version>.yaml, each with its Gate record (ADR-0003, ADR-0005).
 
-A Candidate is frozen once a Run uses it; any change is a new file. Config holds
-environment variable names only, never secret values.
+A Candidate is frozen once a Run uses it; any change is a new file, the next revision
+<tool>@<version>~<n>, and the used file stays as it was so its Runs still load. The
+Baseline mark is a designation, not part of the Candidate, so it moves in place.
+Config holds environment variable names only, never secret values.
 """
 
 from __future__ import annotations
@@ -12,6 +14,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+import yaml
+
 from bench.core.fields import FieldReader
 from bench.core.kinds import Clearance
 
@@ -20,7 +24,16 @@ CANDIDATES_FOLDER = "candidates"
 ADAPTER_KINDS = ("automated", "manual_assisted")
 GATE_RESULTS = ("pass", "fail")
 
-CANDIDATE_FIELDS = ("tool", "version", "adapter", "settings", "env_vars", "baseline", "gate")
+CANDIDATE_FIELDS = (
+    "tool",
+    "version",
+    "adapter",
+    "settings",
+    "env_vars",
+    "cost_per_task_usd",
+    "baseline",
+    "gate",
+)
 GATE_FIELDS = (
     "reviewer",
     "date",
@@ -32,6 +45,9 @@ GATE_FIELDS = (
     "clearance",
 )
 
+# A revision after the first: <tool>@<version>~<n>, n >= 2.
+_REVISION = re.compile(r"^(?P<lineage>.+)~(?P<n>[1-9][0-9]*)$")
+_ID_UNSAFE = re.compile(r"[^a-z0-9._-]+")
 _ENV_VAR = re.compile(r"^[A-Z][A-Z0-9_]*$")
 # Settings keys that would hold a secret value; these belong in env_vars instead.
 _SECRET_KEY = re.compile(r"(^|_)(api_?key|key|secret|password|token|credentials?)$", re.I)
@@ -59,6 +75,29 @@ class Candidate:
     env_vars: tuple[str, ...]
     baseline: bool
     gate: Gate | None  # None until the Gate review is recorded
+    # A manual-assisted Candidate's flat cost per Task, such as a subscription's share.
+    cost_per_task_usd: float | None = None
+
+    @property
+    def lineage(self) -> str:
+        """The id without its revision suffix: what every revision of it shares."""
+        m = _REVISION.match(self.id)
+        return m.group("lineage") if m else self.id
+
+    @property
+    def revision(self) -> int:
+        """1 for <tool>@<version>; n for <tool>@<version>~<n>."""
+        m = _REVISION.match(self.id)
+        return int(m.group("n")) if m else 1
+
+    @property
+    def task_cost_usd(self) -> float | None:
+        """The cost to record for each Task a Run of it does by hand.
+
+        The flat per-Task cost of a manual-assisted Candidate; None otherwise, which
+        scoring treats as no per-Task cost. Automated cost comes from token prices.
+        """
+        return self.cost_per_task_usd if self.adapter == "manual_assisted" else None
 
     @property
     def gate_passed(self) -> bool:
@@ -83,23 +122,81 @@ def load_candidates(root: Path) -> tuple[Candidate, ...]:
     return candidates
 
 
+def candidate_id_for(tool: str, version: str) -> str:
+    """<tool>@<version>, lower-cased, with anything unsafe in a file name made a hyphen."""
+    return f"{_slug(tool)}@{_slug(version)}"
+
+
+def _slug(text: str) -> str:
+    return _ID_UNSAFE.sub("-", text.strip().lower()).strip("-")
+
+
+def write_candidate(root: Path, candidate_id: str, data: dict[str, Any]) -> Candidate:
+    """Validate a Candidate's fields and write candidates/<id>.yaml; ConfigError, naming
+    the field, writes nothing."""
+    path = root / CANDIDATES_FOLDER / f"{candidate_id}.yaml"
+    candidate = parse_candidate(FieldReader(f"{CANDIDATES_FOLDER}/{path.name}"), path.stem, data)
+    path.parent.mkdir(exist_ok=True)
+    path.write_text(yaml.safe_dump(candidate_data(candidate), sort_keys=False))
+    return candidate
+
+
+def candidate_data(c: Candidate) -> dict[str, Any]:
+    """The Candidate as its file holds it."""
+    data: dict[str, Any] = {
+        "tool": c.tool,
+        "version": c.version,
+        "adapter": c.adapter,
+        "settings": c.settings,
+        "env_vars": list(c.env_vars),
+    }
+    if c.cost_per_task_usd is not None:
+        data["cost_per_task_usd"] = c.cost_per_task_usd
+    data["baseline"] = c.baseline
+    data["gate"] = None if c.gate is None else {
+        "reviewer": c.gate.reviewer,
+        "date": c.gate.date.isoformat(),
+        "retention": c.gate.retention,
+        "sso": c.gate.sso,
+        "enterprise_terms": c.gate.enterprise_terms,
+        "connector_support": c.gate.connector_support,
+        "result": c.gate.result,
+        "clearance": None if c.gate.clearance is None else str(c.gate.clearance),
+    }
+    return data
+
+
 def _load(root: Path, path: Path) -> Candidate:
     f = FieldReader(f"{CANDIDATES_FOLDER}/{path.name}")
-    if "@" not in path.stem.strip("@"):
+    return parse_candidate(f, path.stem, f.read(root))
+
+
+def parse_candidate(f: FieldReader, candidate_id: str, data: dict[str, Any]) -> Candidate:
+    if "@" not in candidate_id.strip("@"):
         raise f.fail("(file)", "must be named <tool>@<version>.yaml")
-    data = f.read(root)
     for key in data:
         if key not in CANDIDATE_FIELDS:
             raise f.fail(str(key), f"unknown, expected one of {', '.join(CANDIDATE_FIELDS)}")
+    adapter = f.choice(data.get("adapter"), "adapter", ADAPTER_KINDS)
+    cost = data.get("cost_per_task_usd")
+    if cost is not None:
+        cost = f.number(cost, "cost_per_task_usd", minimum=0)
+        if adapter != "manual_assisted":
+            raise f.fail(
+                "cost_per_task_usd",
+                "only a manual_assisted Candidate has a flat per-Task cost; "
+                "automated cost comes from token prices",
+            )
     return Candidate(
-        id=path.stem,
+        id=candidate_id,
         tool=f.text(data.get("tool"), "tool"),
         version=f.text(data.get("version"), "version"),
-        adapter=f.choice(data.get("adapter"), "adapter", ADAPTER_KINDS),
+        adapter=adapter,
         settings=_settings(f, data.get("settings", {})),
         env_vars=_env_vars(f, data.get("env_vars", [])),
         baseline=f.boolean(data.get("baseline", False), "baseline"),
         gate=None if data.get("gate") is None else _gate(f, data["gate"]),
+        cost_per_task_usd=cost,
     )
 
 
