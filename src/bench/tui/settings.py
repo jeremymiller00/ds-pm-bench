@@ -1,7 +1,9 @@
-"""The Settings tab: edit settings, prices and the Judge Setup, saving through the Workspace.
+"""The Settings tab: edit settings, the shared Rubric, prices and the Judge Setup,
+saving through the Workspace.
 
-The Workspace validates every edit; a refused one is shown next to the field it names
-and nothing is written. The form only reads its fields and sends what changed.
+The Workspace validates every edit and writes back only what changed; a refused one is
+shown next to the field it names and nothing is written. The form only reads its
+fields (numbers through bench.core.fields.number_from_text) and sends them all.
 """
 
 from __future__ import annotations
@@ -15,11 +17,12 @@ from textual.widget import Widget
 from textual.widgets import Button, DataTable, Input, Label, Select, Static, TextArea
 
 from bench.core.errors import ConfigError
+from bench.core.fields import number_from_text
 from bench.core.judging import JUDGE_FILE, JudgeSetup, family_of
 from bench.core.kinds import Clearance, JudgeMode
+from bench.core.rubric import RUBRIC_FILE, Rubric, criterion_dict
 from bench.core.settings import BANDED_MEASURES, DIMENSIONS, Settings
 from bench.core.workspace import Workspace
-from bench.tui.task_editor import FormError
 
 SETTINGS_CSS = """
 SettingsPane { height: 1fr; }
@@ -33,25 +36,8 @@ MARGINS = ("regression_margin", "retest_margin", "spot_check_rate")
 THRESHOLDS = ("within_one_point", "weighted_kappa", "min_items")
 
 
-class FieldError(FormError):
-    """A form field that could not be read, naming the field as a ConfigError does."""
-
-    def __init__(self, field: str, message: str) -> None:
-        self.field = field
-        super().__init__(f"{field}: {message}")
-
-
 def fmt(number: float) -> str:
     return f"{number:g}"
-
-
-def parse_number(text: str, field: str) -> int | float:
-    text = text.strip()
-    try:
-        number = float(text)
-    except ValueError:
-        raise FieldError(field, f"must be a number, got {text!r}") from None
-    return int(number) if number.is_integer() and "." not in text else number
 
 
 def settings_fields(settings: Settings) -> dict[str, str]:
@@ -68,10 +54,10 @@ def settings_fields(settings: Settings) -> dict[str, str]:
 
 def weight_sum(texts: list[str]) -> str:
     """The live sum of the weights as typed, for display only."""
-    try:
-        total = sum(parse_number(t, "weights") for t in texts)
-    except FieldError:
+    numbers = [number_from_text(t) for t in texts]
+    if any(isinstance(n, str) for n in numbers):
         return "Sum: ? (every weight must be a number)"
+    total = sum(numbers)
     return f"Sum: {fmt(total)}" + ("" if total == 100 else " (must be 100)")
 
 
@@ -90,14 +76,18 @@ def models_yaml(setup: JudgeSetup | None) -> str:
     return yaml.safe_dump(models, sort_keys=False)
 
 
-def parse_models(text: str) -> list[dict]:
+def criteria_yaml(rubric: Rubric) -> str:
+    """The shared Criteria as the rubric file lists them."""
+    return yaml.safe_dump([criterion_dict(c) for c in rubric.criteria], sort_keys=False,
+                          allow_unicode=True)
+
+
+def yaml_list(text: str, file: str, field: str) -> object:
+    """A YAML list typed into a form; anything else goes on to be refused naming field."""
     try:
-        models = yaml.safe_load(text)
+        return yaml.safe_load(text)
     except yaml.YAMLError as error:
-        raise FieldError("models", f"not valid YAML: {error}") from None
-    if not isinstance(models, list):
-        raise FieldError("models", "must be a YAML list of {provider, model}")
-    return models
+        raise ConfigError(file, field, f"not valid YAML: {error}") from None
 
 
 def error_slot(field: str) -> str:
@@ -121,6 +111,8 @@ class SettingsPane(VerticalScroll):
     def compose(self) -> ComposeResult:
         with Vertical(id="settings-form", classes="settings-section"):
             yield from self._compose_settings()
+        with Vertical(id="rubric-form", classes="settings-section"):
+            yield from self._compose_rubric()
         with Vertical(id="prices-form", classes="settings-section"):
             yield from self._compose_prices()
         with Vertical(id="judge-form", classes="settings-section"):
@@ -159,6 +151,32 @@ class SettingsPane(VerticalScroll):
             yield Static("", id=f"err-band-{m}", classes="form-error", markup=False)
         yield Static("", id="settings-status", markup=False)
         yield Button("Save settings", id="settings-save", variant="primary")
+
+    def _compose_rubric(self) -> ComposeResult:
+        yield Static(f"Shared Rubric ({RUBRIC_FILE}): every Task is scored on these "
+                     "Criteria, then its own. Add, edit or remove entries, each id, name "
+                     "and description. A Run keeps the Rubric it started with.",
+                     markup=False)
+        yield TextArea(criteria_yaml(self.workspace.rubric), id="rubric-criteria")
+        yield Static("", id="err-rubric", classes="form-error", markup=False)
+        yield Static("", id="rubric-status", markup=False)
+        yield Button("Save Rubric", id="rubric-save", variant="primary")
+
+    def save_rubric(self) -> None:
+        self._clear_errors("rubric-form")
+        status = self.query_one("#rubric-status", Static)
+        before = self.workspace.rubric
+        area = self.query_one("#rubric-criteria", TextArea)
+        try:
+            criteria = yaml_list(area.text, RUBRIC_FILE, "criteria")
+            self.workspace.update_rubric(criteria if isinstance(criteria, list) else [criteria])
+        except ConfigError as error:
+            status.update("Not saved.")
+            self._show_error(error, "rubric-form", "err-rubric")
+            return
+        status.update("Nothing changed." if self.workspace.rubric == before
+                      else f"Saved {RUBRIC_FILE}.")
+        area.text = criteria_yaml(self.workspace.rubric)
 
     def _compose_prices(self) -> ComposeResult:
         yield Static("Prices: USD per million tokens, keyed by the exact model string a "
@@ -199,10 +217,10 @@ class SettingsPane(VerticalScroll):
         try:
             self.workspace.set_price(
                 self._value("price-model").strip(),
-                input_per_mtok=parse_number(self._value("price-input"), "input_per_mtok"),
-                output_per_mtok=parse_number(self._value("price-output"), "output_per_mtok"),
+                input_per_mtok=number_from_text(self._value("price-input")),
+                output_per_mtok=number_from_text(self._value("price-output")),
             )
-        except (FormError, ConfigError) as error:
+        except ConfigError as error:
             self._show_error(error, "prices-form", "err-prices")
             return
         self._list_prices()
@@ -251,26 +269,20 @@ class SettingsPane(VerticalScroll):
 
     def save_judge_setup(self) -> None:
         self._clear_errors("judge-form")
-        setup = self.workspace.judge_setup
         was_certified = self.workspace.judge_certified
-        changes: dict[str, object] = {}
-        for key in ("mode", "clearance"):
-            value = self.query_one(f"#judge-{key}", Select).value
-            current = getattr(setup, key, None) if setup else None
-            if value != Select.NULL and value != current:
-                changes[key] = value
-        models = self.query_one("#judge-models", TextArea).text
-        prompt_file = self._value("judge-prompt-file").strip()
-        prompt = self.query_one("#judge-prompt", TextArea).text
+        mode = self.query_one("#judge-mode", Select).value
+        clearance = self.query_one("#judge-clearance", Select).value
         try:
-            if models != models_yaml(setup):
-                changes["models"] = parse_models(models)
-            if prompt_file != (setup.prompt_file if setup else ""):
-                changes["prompt_file"] = prompt_file
-            if prompt != (setup.prompt if setup else ""):
-                changes["prompt"] = prompt
-            self.workspace.update_judge_setup(**changes)
-        except (FormError, ConfigError) as error:
+            models = yaml_list(self.query_one("#judge-models", TextArea).text, JUDGE_FILE,
+                               "models")
+            self.workspace.update_judge_setup(
+                mode=None if mode == Select.NULL else str(mode),
+                clearance=None if clearance == Select.NULL else str(clearance),
+                models=models,
+                prompt_file=self._value("judge-prompt-file").strip() or None,
+                prompt=self.query_one("#judge-prompt", TextArea).text,
+            )
+        except ConfigError as error:
             self._show_error(error, "judge-form", "err-judge")
             return
         dropped = was_certified and not self.workspace.judge_certified
@@ -289,8 +301,9 @@ class SettingsPane(VerticalScroll):
     # Saving
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
-        saves = {"settings-save": self.save_settings, "price-save": self.set_price,
-                 "price-remove": self.remove_price, "judge-save": self.save_judge_setup}
+        saves = {"settings-save": self.save_settings, "rubric-save": self.save_rubric,
+                 "price-save": self.set_price, "price-remove": self.remove_price,
+                 "judge-save": self.save_judge_setup}
         if event.button.id in saves:
             saves[event.button.id]()
 
@@ -298,8 +311,8 @@ class SettingsPane(VerticalScroll):
         focused = self.app.focused
         section = next((w for w in (focused.ancestors if focused else ())
                         if isinstance(w, Widget) and w.has_class("settings-section")), None)
-        saves = {"settings-form": self.save_settings, "prices-form": self.set_price,
-                 "judge-form": self.save_judge_setup}
+        saves = {"settings-form": self.save_settings, "rubric-form": self.save_rubric,
+                 "prices-form": self.set_price, "judge-form": self.save_judge_setup}
         if section is not None and section.id in saves:
             saves[section.id]()
 
@@ -307,11 +320,11 @@ class SettingsPane(VerticalScroll):
         for error in self.query_one(f"#{section}").query(".form-error"):
             error.update("")
 
-    def _show_error(self, error: FormError | ConfigError, section: str, fallback: str) -> None:
+    def _show_error(self, error: ConfigError, section: str, fallback: str) -> None:
         """Show error next to the field it names, else in the section's fallback slot."""
         form = self.query_one(f"#{section}")
         try:
-            slot = form.query_one(f"#{error_slot(getattr(error, 'field', ''))}", Static)
+            slot = form.query_one(f"#{error_slot(error.field)}", Static)
         except NoMatches:  # a field without its own slot
             slot = form.query_one(f"#{fallback}", Static)
         slot.update(str(error))
@@ -319,47 +332,34 @@ class SettingsPane(VerticalScroll):
     def save_settings(self) -> None:
         self._clear_errors("settings-form")
         status = self.query_one("#settings-status", Static)
+        before = self.workspace.settings
         try:
-            changes = self._settings_changes()
-            self.workspace.update_settings(**changes)
-        except (FormError, ConfigError) as error:
+            self.workspace.update_settings(**self._settings_form())
+        except ConfigError as error:
             status.update("Not saved: fix the field marked below.")
             self._show_error(error, "settings-form", "settings-status")
             return
-        status.update("Saved config/settings.yaml." if changes else "Nothing changed.")
+        status.update("Nothing changed." if self.workspace.settings == before
+                      else "Saved config/settings.yaml.")
 
     def _value(self, widget_id: str) -> str:
         return self.query_one(f"#{widget_id}", Input).value
 
-    def _settings_changes(self) -> dict[str, object]:
-        """What the form changes, read into values for update_settings."""
-        settings = self.workspace.settings
-        start = settings_fields(settings)
-        changed = {k for k, v in start.items() if self._value(k).strip() != v}
-        changes: dict[str, object] = {}
-        if "set-tracks" in changed:
-            changes["tracks"] = [t.strip() for t in self._value("set-tracks").split(",")
-                                 if t.strip()]
-        if any(f"set-weight-{d}" in changed for d in DIMENSIONS):
-            changes["weights"] = {
-                d: parse_number(self._value(f"set-weight-{d}"), f"weights.{d}")
-                for d in DIMENSIONS
-            }
-        for m in MARGINS:
-            if f"set-{m}" in changed:
-                changes[m] = parse_number(self._value(f"set-{m}"), m)
-        calibration = {t: parse_number(self._value(f"set-calibration-{t}"), f"calibration.{t}")
-                       for t in THRESHOLDS if f"set-calibration-{t}" in changed}
-        if calibration:
-            changes["calibration"] = calibration
-        bands = {}
-        for m in BANDED_MEASURES:
-            better = self.query_one(f"#set-better-{m}", Select).value
-            if f"set-band-{m}" in changed or better != settings.normalization[m].better:
-                field = f"normalization.{m}.thresholds"
-                bands[m] = {"better": better, "thresholds": [
-                    parse_number(t, field) for t in self._value(f"set-band-{m}").split(",")
-                ]}
-        if bands:
-            changes["normalization"] = bands
-        return changes
+    def _settings_form(self) -> dict[str, object]:
+        """Every setting as the form holds it, for update_settings to validate; it
+        writes back only what changed."""
+        def number(widget_id: str) -> int | float | str:
+            return number_from_text(self._value(widget_id))
+
+        return {
+            "tracks": [t.strip() for t in self._value("set-tracks").split(",") if t.strip()],
+            "weights": {d: number(f"set-weight-{d}") for d in DIMENSIONS},
+            **{m: number(f"set-{m}") for m in MARGINS},
+            "calibration": {t: number(f"set-calibration-{t}") for t in THRESHOLDS},
+            "normalization": {
+                m: {"better": self.query_one(f"#set-better-{m}", Select).value,
+                    "thresholds": [number_from_text(t)
+                                   for t in self._value(f"set-band-{m}").split(",")]}
+                for m in BANDED_MEASURES
+            },
+        }

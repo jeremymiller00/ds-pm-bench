@@ -46,6 +46,18 @@ def _segments(text: str) -> list[tuple[str | None, str]]:
     return result
 
 
+def number_from_text(text: str) -> int | float | str:
+    """A number typed into a form: an int when written without a point, else a float.
+    Text that is not a number comes back as it was typed (stripped), so validation
+    refuses it naming its field, like any other bad value."""
+    text = text.strip()
+    try:
+        number = float(text)
+    except ValueError:
+        return text
+    return int(number) if number.is_integer() and "." not in text else number
+
+
 class FieldReader:
     """Reads typed fields from one config file, raising ConfigError with a dotted path."""
 

@@ -258,3 +258,37 @@ async def test_without_a_judge_setup_the_form_creates_one(workspace_dir: Path):
     assert "No Judge Setup yet" in before
     assert "not certified" in after
     assert Workspace.open(workspace_dir).judge_setup.prompt == "Score the Output."
+
+
+async def test_shared_rubric_criteria_are_edited_in_the_settings_tab(workspace_dir: Path):
+    app = BenchApp(Workspace.open(workspace_dir))
+    async with app.run_test() as pilot:
+        await open_settings(app, pilot)
+        shown = app.query_one("#rubric-criteria", TextArea).text
+        area = app.query_one("#rubric-criteria", TextArea)
+        area.text = area.text.replace("Format fit", "Fits the format") + (
+            "- id: timeliness\n  name: Timeliness\n  description: Fits the deadline.\n"
+        )
+        await save(app, pilot, "#rubric-save")
+        status = text(app, "#rubric-status")
+
+    assert "pm_judgment" in shown
+    rubric = Workspace.open(workspace_dir).rubric
+    assert rubric.criteria[-1].id == "timeliness"
+    assert rubric.criterion("format_fit").name == "Fits the format"
+    assert "Saved" in status
+
+
+async def test_a_refused_rubric_edit_is_shown_and_writes_nothing(workspace_dir: Path):
+    write_task(workspace_dir, "T1.1")  # defines names_the_decision
+    before = (workspace_dir / "config" / "rubric.yaml").read_text()
+    app = BenchApp(Workspace.open(workspace_dir))
+    async with app.run_test() as pilot:
+        await open_settings(app, pilot)
+        area = app.query_one("#rubric-criteria", TextArea)
+        area.text += "- id: names_the_decision\n  name: Decision\n  description: Names it.\n"
+        await save(app, pilot, "#rubric-save")
+        error = text(app, "#err-rubric")
+
+    assert "T1.1" in error
+    assert (workspace_dir / "config" / "rubric.yaml").read_text() == before
