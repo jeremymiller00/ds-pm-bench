@@ -10,6 +10,7 @@ from textual.widgets import Footer, Header, Static, TabbedContent, TabPane
 
 from bench.core.workspace import Workspace
 from bench.tui.candidates import CandidateBrowser
+from bench.tui.comparisons import ComparisonsPane, DecisionLogPane
 from bench.tui.runs import RunsPane
 from bench.tui.tasks import TaskBrowser
 
@@ -20,6 +21,11 @@ PLACEHOLDER_SECTIONS = (
     ("decision-log", "Decision Log"),
     ("settings", "Settings"),
 )
+# Sections built so far among those above: pane id -> the widget it shows.
+BUILT_SECTIONS = {
+    "comparisons": ComparisonsPane,
+    "decision-log": DecisionLogPane,
+}
 
 
 class BenchApp(App[None]):
@@ -40,5 +46,8 @@ class BenchApp(App[None]):
                 yield RunsPane(self.workspace)
             for pane_id, label in PLACEHOLDER_SECTIONS:
                 with TabPane(label, id=pane_id):
-                    yield Static(f"{label}: not built yet.")
+                    if pane_id in BUILT_SECTIONS:
+                        yield BUILT_SECTIONS[pane_id](self.workspace)
+                    else:
+                        yield Static(f"{label}: not built yet.")
         yield Footer()
