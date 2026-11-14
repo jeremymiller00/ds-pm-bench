@@ -5,10 +5,11 @@ from __future__ import annotations
 import datetime
 import shutil
 from collections.abc import Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from bench.core.adapters import Clock, Editor, ExternalEditor, SystemClock
 from bench.core.candidates import Candidate, load_candidates
 from bench.core.catalog import CATALOG
 from bench.core.decisions import log_verdict, read_log
@@ -34,6 +35,7 @@ from bench.core.runs import (
     tasks_in,
 )
 from bench.core.scoring import RunScore, score_run
+from bench.core.sessions import ManualSession
 from bench.core.settings import SETTINGS_FILE, Settings, load_settings
 from bench.core.tasks import (
     CriterionSpec,
@@ -51,7 +53,8 @@ from bench.core.verdicts import Comparison, Verdict, compare, gate_verdict
 class Workspace:
     """Opened from the repo root holding config/, Tasks, Candidates and Runs.
 
-    tasks is replaced when a Task is created or edited.
+    tasks is replaced when a Task is created or edited. clock and editor are the
+    Adapters for timing and $EDITOR; tests inject fakes.
     """
 
     root: Path
@@ -60,9 +63,13 @@ class Workspace:
     prices: PriceTable
     tasks: tuple[Task, ...]
     candidates: tuple[Candidate, ...]
+    clock: Clock = field(default_factory=SystemClock)
+    editor: Editor = field(default_factory=ExternalEditor)
 
     @classmethod
-    def open(cls, path: str | Path) -> Workspace:
+    def open(
+        cls, path: str | Path, *, clock: Clock | None = None, editor: Editor | None = None
+    ) -> Workspace:
         root = Path(path).resolve()
         settings = load_settings(root)
         rubric = load_rubric(root)
@@ -74,6 +81,8 @@ class Workspace:
             prices=load_prices(root),
             tasks=load_tasks(ctx),
             candidates=load_candidates(root),
+            clock=clock or SystemClock(),
+            editor=editor or ExternalEditor(),
         )
 
     @property
@@ -254,6 +263,15 @@ class Workspace:
         """
         check_clearance(run.candidate, self.task(task_id))
         return run.task_input(task_id)
+
+    def begin_manual_task(self, run: Run, task_id: str) -> ManualSession:
+        """Begin working a Task of the Run by hand: returns the session showing its
+        Canonical Prompt and input, with the clock started.
+
+        Clearance is checked before any content is read (ClearanceError).
+        """
+        prompt = self.task_input(run, task_id)
+        return ManualSession(run, task_id, prompt, self.clock, self.editor)
 
     def resume_run(self, run_id: str) -> Run:
         """Reopen a Run, such as one left half-finished; see Run.pending.
