@@ -123,6 +123,11 @@ class CalibrationError(ValueError):
     set, an unknown item, or human scores that do not match its Criteria."""
 
 
+class CertificationFailed(CalibrationError):
+    """The Judge Setup's agreement with the human scores does not meet the thresholds,
+    or the Calibration Set is empty or not fully scored; nothing is logged."""
+
+
 class CandidateToolError(Exception):
     """An automated Candidate's tool errored: an API error, a timeout or no Output."""
 

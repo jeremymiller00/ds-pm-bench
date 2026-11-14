@@ -13,13 +13,19 @@ from bench.core.adapters import (
 )
 from bench.core.attempts import Attempt
 from bench.core.automated import ReturnedOutput
-from bench.core.calibration import BlindCalibrationItem, CalibrationItem
+from bench.core.calibration import (
+    Agreement,
+    BlindCalibrationItem,
+    CalibrationItem,
+    CriterionAgreement,
+)
 from bench.core.errors import (
     AttemptError,
     CalibrationError,
     CandidateAuthoringError,
     CandidateToolError,
     CandidateUnavailable,
+    CertificationFailed,
     ClearanceError,
     ConfigError,
     EditorError,
@@ -58,6 +64,7 @@ from bench.core.workspace import Workspace
 
 __all__ = [
     "AdapterFactory",
+    "Agreement",
     "Attempt",
     "AttemptError",
     "BlindCalibrationItem",
@@ -68,8 +75,10 @@ __all__ = [
     "CandidateReply",
     "CandidateToolError",
     "CandidateUnavailable",
+    "CertificationFailed",
     "Clock",
     "Comparison",
+    "CriterionAgreement",
     "ClearanceError",
     "ConfigError",
     "Editor",

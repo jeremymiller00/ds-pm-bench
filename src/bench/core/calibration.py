@@ -77,9 +77,12 @@ class CriterionAgreement:
 class Agreement:
     """A Judge Setup's agreement with the human scores on the Calibration Set.
 
-    criteria holds each Criterion's agreement; overall pools every Criterion's scores,
-    and is what Certification tests against the thresholds. unscored and unjudged list
-    the items still lacking a human score or this Judge Setup's score; they are left out.
+    criteria holds each Criterion's agreement and overall pools every Criterion's
+    scores. Certification needs every Criterion to meet both thresholds; a Criterion
+    whose kappa is undefined (human and Judge gave one same score throughout, which is
+    perfect agreement) is held to the within-1-point share only. unscored and unjudged
+    list the items still lacking a human score or this Judge Setup's score; they are
+    left out of the numbers, and certifying needs neither to be left.
     """
 
     judge_setup_hash: str
@@ -91,19 +94,34 @@ class Agreement:
     weighted_kappa_threshold: float
 
     @property
-    def complete(self) -> bool:
-        """Every item has a human score and this Judge Setup's score, and there is one."""
-        return self.overall.items > 0 and not self.unscored and not self.unjudged
+    def shortfalls(self) -> tuple[str, ...]:
+        """Why this agreement does not certify the Judge Setup; empty when it does."""
+        if not self.unscored and not self.unjudged and self.overall.items == 0:
+            return ("the Calibration Set is empty",)
+        found = []
+        if self.unscored:
+            found.append(f"no human score yet for {', '.join(self.unscored)}")
+        if self.unjudged:
+            found.append(
+                f"not scored by Judge Setup {self.judge_setup_hash} yet: "
+                f"{', '.join(self.unjudged)}"
+            )
+        for cid, a in self.criteria.items():
+            if a.within_one_point < self.within_one_point_threshold:
+                found.append(
+                    f"{cid}: {a.within_one_point:.0%} within 1 point, below "
+                    f"{self.within_one_point_threshold:.0%}"
+                )
+            if a.weighted_kappa is not None and a.weighted_kappa < self.weighted_kappa_threshold:
+                found.append(
+                    f"{cid}: weighted kappa {a.weighted_kappa:.2f}, below "
+                    f"{self.weighted_kappa_threshold:.2f}"
+                )
+        return tuple(found)
 
     @property
     def meets_thresholds(self) -> bool:
-        kappa = self.overall.weighted_kappa
-        return (
-            self.complete
-            and self.overall.within_one_point >= self.within_one_point_threshold
-            and kappa is not None
-            and kappa >= self.weighted_kappa_threshold
-        )
+        return not self.shortfalls
 
 
 def weighted_kappa(human: list[float], judge: list[float]) -> float | None:

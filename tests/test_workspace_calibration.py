@@ -3,8 +3,15 @@ import json
 from pathlib import Path
 
 import pytest
+import yaml
 
-from bench import CalibrationError, JudgeClearanceError, Workspace
+from bench import (
+    CalibrationError,
+    CertificationFailed,
+    JudgeClearanceError,
+    JudgeNotCertified,
+    Workspace,
+)
 from test_workspace_candidates import candidate, write_candidate
 from test_workspace_judging import (
     CANDIDATE,
@@ -242,3 +249,101 @@ def test_a_private_item_is_refused_to_a_judge_without_private_clearance(private_
     reasons = (private / "calibration" / "judge" / f"{judging.task_id}.yaml").read_text()
     assert "ok." in reasons
     assert "ok." not in (ws_dir / "calibration" / f"{judging.task_id}.yaml").read_text()
+
+
+AGREEING = [{"clarity": s, "correctness": s} for s in (1, 2, 3, 4, 5)]
+CLOSE = [{"clarity": s, "correctness": s} for s in (1, 2, 3, 4, 4)]
+
+
+def certified_workspace(ws_dir: Path) -> Workspace:
+    ws = Workspace.open(ws_dir, judges=judges_for(CLOSE))
+    calibration_set(ws, AGREEING, CLOSE)
+    ws.judge_calibration_set()
+    ws.certify_judge(on=DAY)
+    return ws
+
+
+def test_a_judge_setup_meeting_the_thresholds_is_certified_and_logged(ws_dir: Path):
+    ws = certified_workspace(ws_dir)
+
+    assert ws.judge_certified
+    [entry] = ws.decision_log()
+    assert entry["kind"] == "judge_certification"
+    assert entry["date"] == DAY.isoformat()
+    assert entry["judge_setup_hash"] == ws.judge_setup.hash
+    assert entry["items"] == [i.id for i in ws.calibration_items()]
+    assert entry["within_one_point"] == 1.0
+    assert entry["weighted_kappa"] >= 0.6
+    assert entry["thresholds"] == {"within_one_point": 0.9, "weighted_kappa": 0.6}
+    assert entry["criteria"]["clarity"]["weighted_kappa"] == pytest.approx(16 / 17)
+    assert Workspace.open(ws_dir).judge_certified  # it is read back from the log
+
+
+def test_a_judge_setup_below_the_thresholds_is_not_certified(ws_dir: Path):
+    ws = Workspace.open(ws_dir, judges=judges_for(JUDGED))
+    calibration_set(ws, HUMAN, JUDGED)
+    ws.judge_calibration_set()
+
+    with pytest.raises(CertificationFailed, match="within 1 point"):
+        ws.certify_judge(on=DAY)
+
+    assert not ws.judge_certified
+    assert ws.decision_log() == ()
+
+
+def test_the_thresholds_come_from_the_settings(ws_dir: Path):
+    path = ws_dir / "config" / "settings.yaml"
+    data = yaml.safe_load(path.read_text())
+    data["calibration"]["weighted_kappa"] = 0.99
+    path.write_text(yaml.safe_dump(data))
+    ws = Workspace.open(ws_dir, judges=judges_for(CLOSE))
+    calibration_set(ws, AGREEING, CLOSE)
+    ws.judge_calibration_set()
+
+    with pytest.raises(CertificationFailed, match="kappa"):
+        ws.certify_judge(on=DAY)
+
+
+def test_certification_needs_every_item_scored_by_the_human_and_the_judge(ws_dir: Path):
+    ws = Workspace.open(ws_dir, judges=judges_for(CLOSE))
+    with pytest.raises(CertificationFailed, match="empty"):
+        ws.certify_judge(on=DAY)
+    calibration_set(ws, AGREEING, CLOSE)
+    with pytest.raises(CertificationFailed, match="not scored by Judge Setup"):
+        ws.certify_judge(on=DAY)
+    ws.judge_calibration_set()
+    run = ws.start_run(CANDIDATE, on=DAY + datetime.timedelta(days=30))
+    run.record_output("T1.1", raw="d", final="late", active_seconds=1, latency_seconds=1,
+                      cost_usd=None)
+    ws.add_calibration_item(run.id, "T1.1")
+
+    with pytest.raises(CertificationFailed, match="no human score"):
+        ws.certify_judge(on=DAY)
+
+
+def test_a_certified_judge_judges_a_run_without_an_override(ws_dir: Path):
+    ws = certified_workspace(ws_dir)
+    run = ws.start_run(CANDIDATE, on=DAY + datetime.timedelta(days=60))
+    run.record_output("T1.1", raw="d", final=OUTPUT, active_seconds=1, latency_seconds=1,
+                      cost_usd=None)
+
+    ws.judge_run(run)
+
+    assert run.unjudged == ()
+    assert [e["kind"] for e in ws.decision_log()] == ["judge_certification"]
+
+
+def test_editing_the_judge_prompt_loses_certification(ws_dir: Path):
+    certified_workspace(ws_dir)
+    write_judge_setup(ws_dir, prompt="Score harshly.")
+    ws = Workspace.open(ws_dir, judges=judges_for(CLOSE))
+    run = ws.start_run(CANDIDATE, on=DAY + datetime.timedelta(days=60))
+    run.record_output("T1.1", raw="d", final=OUTPUT, active_seconds=1, latency_seconds=1,
+                      cost_usd=None)
+
+    assert not ws.judge_certified
+    assert ws.calibration_agreement().unjudged  # the new Judge Setup must re-score
+    with pytest.raises(JudgeNotCertified, match="recalibrate"):
+        ws.judge_run(run)
+    ws.judge_run(run, allow_uncertified=True)  # the override path stays
+    assert ws.decision_log()[-1]["kind"] == "uncertified_judge_override"

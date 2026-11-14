@@ -42,11 +42,19 @@ from bench.core.candidates import (
     write_candidate,
 )
 from bench.core.catalog import CATALOG
-from bench.core.decisions import log_override, log_verdict, override_logged, read_log
+from bench.core.decisions import (
+    certified,
+    log_certification,
+    log_override,
+    log_verdict,
+    override_logged,
+    read_log,
+)
 from bench.core.errors import (
     AttemptError,
     CandidateAuthoringError,
     CandidateUnavailable,
+    CertificationFailed,
     GateNotPassed,
     JudgeClearanceError,
     JudgeNotCertified,
@@ -624,16 +632,17 @@ class Workspace:
         Every refusal is a JudgingError, raised before any judge model is called: a Run
         with pending Tasks (RunNotFinished); no Judge Setup, or a judge model that
         cannot be made, its API key missing included (JudgeUnavailable); an uncertified
-        Judge Setup without allow_uncertified (JudgeNotCertified; Certification arrives
-        in slice 5); a Run already judged by another Judge Setup (JudgeSetupMismatch); a
-        judge model that is the model the Candidate calls (JudgeRefused); a Private Task
-        to a Judge Setup without private Clearance (JudgeClearanceError).
+        Judge Setup without allow_uncertified (JudgeNotCertified); a Run already judged
+        by another Judge Setup (JudgeSetupMismatch); a judge model that is the model the
+        Candidate calls (JudgeRefused); a Private Task to a Judge Setup without private
+        Clearance (JudgeClearanceError). A certified Judge Setup (certify_judge) needs no
+        override and logs none.
 
-        The uncertified override is appended to the Decision Log once the first Task is
-        judged, and only once per Run and Judge Setup, so a resumed judging logs nothing
-        new. A malformed reply raises JudgeReplyError; Tasks judged before it stay
-        recorded, so judging again resumes. A same-family judge model marks every Task
-        for a full human check.
+        For an uncertified Judge Setup the override is appended to the Decision Log once
+        the first Task is judged, and only once per Run and Judge Setup, so a resumed
+        judging logs nothing new. A malformed reply raises JudgeReplyError; Tasks judged
+        before it stay recorded, so judging again resumes. A same-family judge model
+        marks every Task for a full human check.
         """
         setup = self._require_judge_setup()
         if run.pending:
@@ -641,10 +650,12 @@ class Workspace:
                 f"Run {run.id} is not finished: {', '.join(run.pending)} still pending; "
                 "judge it once every Task's Output is recorded"
             )
-        if not allow_uncertified:
+        is_certified = certified(self.root, setup.hash)
+        if not is_certified and not allow_uncertified:
             raise JudgeNotCertified(
-                f"Judge Setup {setup.hash} is not certified; pass allow_uncertified=True "
-                "to judge anyway, which is logged to the Decision Log"
+                f"Judge Setup {setup.hash} is not certified; recalibrate it on the "
+                "Calibration Set and certify it, or pass allow_uncertified=True to judge "
+                "anyway, which is logged to the Decision Log"
             )
         run.check_judge_setup(setup)
         candidate = run.candidate
@@ -678,7 +689,7 @@ class Workspace:
             judging = _judging(task.id, request, models, same_family=family,
                                where=f"Task {task.id}")
             run.record_judging(judging, setup)
-            if not override_logged(self.root, run.id, setup.hash):
+            if not is_certified and not override_logged(self.root, run.id, setup.hash):
                 log_override(self.root, self.clock.today(), run.id, candidate.id, setup.hash)
             judged.append(judging)
         return tuple(judged)
@@ -755,6 +766,33 @@ class Workspace:
         return self.calibration_set.agreement(
             setup.hash, thresholds.within_one_point, thresholds.weighted_kappa
         )
+
+    @property
+    def judge_certified(self) -> bool:
+        """Whether the current Judge Setup is certified: a Certification of its hash is in
+        the Decision Log. Editing its models or prompt makes a new hash, uncertified
+        until it is calibrated and certified itself (story 44). False with no Judge Setup."""
+        return self.judge_setup is not None and certified(self.root, self.judge_setup.hash)
+
+    def certify_judge(self, *, on: datetime.date | None = None) -> Agreement:
+        """Certify the current Judge Setup on the Calibration Set and log it to the
+        Decision Log; returns the agreement it was certified on.
+
+        Every item must have a human score and this Judge Setup's score, and every
+        Criterion must meet the configured thresholds (settings calibration:
+        within_one_point, weighted_kappa); otherwise CertificationFailed names each
+        shortfall and nothing is logged. Certifying a certified Judge Setup logs nothing new.
+        """
+        setup = self._require_judge_setup()
+        agreement = self.calibration_agreement()
+        if not agreement.meets_thresholds:
+            raise CertificationFailed(
+                f"Judge Setup {setup.hash} is not certified: " + "; ".join(agreement.shortfalls)
+            )
+        if not self.judge_certified:
+            item_ids = tuple(i.id for i in self.calibration_set.items())
+            log_certification(self.root, on or self.clock.today(), setup, agreement, item_ids)
+        return agreement
 
     def _require_judge_setup(self) -> JudgeSetup:
         if self.judge_setup is None:
