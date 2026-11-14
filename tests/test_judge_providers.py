@@ -8,10 +8,11 @@ import anthropic
 import openai
 import pytest
 
-from bench import JudgeReplyError, JudgeUnavailable, MissingSecret, Workspace
+from bench import JudgeReplyError, JudgeUnavailable, Workspace
 from bench.core.judging import JudgeRequest, parse_reply
-from bench.core.providers import AnthropicJudge, OpenAIJudge
 from bench.core.rubric import Criterion
+from bench.providers import AnthropicJudge, OpenAIJudge
+from bench.wiring import open_workspace
 from test_providers import FakeEndpoint
 from test_workspace_judging import recorded_run, write_judge_setup
 from test_workspace_judging import ws_dir as ws_dir  # noqa: F401  (fixture)
@@ -140,7 +141,7 @@ def test_by_default_the_workspace_makes_each_judge_from_its_provider_and_key(
         {"provider": "openai", "model": "some-gpt-model"},
         {"provider": "anthropic", "model": "some-claude-model"},
     ])
-    ws = Workspace.open(workspace_dir)
+    ws = open_workspace(workspace_dir)
     gpt, claude = (ws.judges(spec) for spec in ws.judge_setup.models)
 
     assert isinstance(gpt, OpenAIJudge) and gpt.model == "some-gpt-model"
@@ -158,7 +159,7 @@ def test_judge_yaml_names_the_key_variable_and_it_is_not_part_of_the_hash(
     write_judge_setup(workspace_dir, models=[
         {"provider": "openai", "model": "gpt-6", "env_var": "MY_JUDGE_KEY"},
     ])
-    ws = Workspace.open(workspace_dir)
+    ws = open_workspace(workspace_dir)
     [spec] = ws.judge_setup.models
 
     assert spec.env_var == "MY_JUDGE_KEY"
@@ -170,10 +171,10 @@ def test_a_missing_judge_key_names_the_variable_before_anything_is_logged(
     ws_dir: Path, monkeypatch  # noqa: F811
 ):
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
-    ws = Workspace.open(ws_dir)
+    ws = open_workspace(ws_dir)
     run = recorded_run(ws)
 
-    with pytest.raises(MissingSecret, match="OPENAI_API_KEY"):
+    with pytest.raises(JudgeUnavailable, match="OPENAI_API_KEY"):
         ws.judge_run(run, allow_uncertified=True)
 
     assert ws.decision_log() == ()
@@ -183,7 +184,7 @@ def test_a_missing_judge_key_names_the_variable_before_anything_is_logged(
 def test_a_provider_with_no_judge_model_is_unavailable(workspace_dir: Path, monkeypatch):
     monkeypatch.setenv("GOOGLE_API_KEY", "k")
     write_judge_setup(workspace_dir, models=[{"provider": "google", "model": "gemini-4"}])
-    ws = Workspace.open(workspace_dir)
+    ws = open_workspace(workspace_dir)
 
     with pytest.raises(JudgeUnavailable, match="google"):
         ws.judges(ws.judge_setup.models[0])

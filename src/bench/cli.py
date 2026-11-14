@@ -37,6 +37,7 @@ from bench.core.errors import (
 from bench.core.kinds import Suite
 from bench.core.verdicts import Verdict
 from bench.core.workspace import Workspace
+from bench.wiring import open_workspace
 
 # Refusals the CLI reports as one line rather than a traceback. ConfigError and the
 # Unknown*Error lookups are ValueError and LookupError subclasses.
@@ -57,7 +58,7 @@ _REFUSALS = (
 def main(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     try:
-        ws = Workspace.open(args.workspace)
+        ws = open_workspace(args.workspace)
         return args.command(ws, args)
     except (OSError, yaml.YAMLError) as error:
         print(f"bench: {error}", file=sys.stderr)

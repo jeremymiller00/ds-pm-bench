@@ -18,7 +18,7 @@ from pathlib import Path
 
 import pytest
 
-from bench import Workspace
+from bench.wiring import open_workspace
 from conftest import REPO_ROOT
 from test_workspace_candidates import candidate, write_candidate
 from test_workspace_tasks import write_task
@@ -48,7 +48,7 @@ def test_a_live_call_returns_an_output_with_tokens(
     )
     data["gate"]["clearance"] = "public_only"
     write_candidate(workspace_dir, "live@1", data)
-    ws = Workspace.open(workspace_dir)
+    ws = open_workspace(workspace_dir)
     run = ws.start_run("live@1")
 
     pending = ws.run_automated_task(run, "T1.1")
@@ -66,7 +66,7 @@ def test_the_default_judge_setup_judges_the_example_task_once(workspace_dir: Pat
     data = candidate(adapter="manual_assisted", env_vars=[], baseline=True)
     data["gate"]["clearance"] = "public_only"
     write_candidate(workspace_dir, "claude@claude-opus-5-5", data)
-    ws = Workspace.open(workspace_dir)  # the default judges: real provider calls
+    ws = open_workspace(workspace_dir)  # the real provider judge models
     [spec] = ws.judge_setup.models
     if not os.environ.get(spec.env_var):
         pytest.skip(f"set {spec.env_var} to smoke-test Judge {spec.label}")

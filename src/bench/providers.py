@@ -1,11 +1,12 @@
 """The real Candidate Adapters: Anthropic and OpenAI through their official Python SDKs.
 
-A Candidate's provider is settings.provider, else read from its tool (Claude or
-Anthropic; OpenAI, ChatGPT or GPT). Its model id is settings.model, else its version;
-nothing here names a model. settings.max_tokens and settings.temperature are passed on
-when set. The API key is read from the first of the Candidate's env_vars, in the
-environment or else the git-ignored .env at the Workspace root (ADR-0005); a key that
-is missing raises MissingSecret naming the variable, never a value.
+A Candidate's provider is settings.provider, else the one its tool names in
+bench.core.provider_registry; only Anthropic and OpenAI have Adapters here. Its model id
+is settings.model, else its version; nothing here names a model. settings.max_tokens and
+settings.temperature are passed on when set. The API key is read from the first of the
+Candidate's env_vars, in the environment or else the git-ignored .env at the Workspace
+root (ADR-0005); a key that is missing raises MissingSecret naming the variable, never
+a value.
 
 The SDK clients are made with max_retries=0: the one retry the protocol allows is the
 Workspace's (story 22), so an SDK must not add its own.
@@ -20,9 +21,8 @@ from typing import Any
 import anthropic
 import openai
 
-from bench.core.adapters import CandidateAdapter, CandidateReply
-from bench.core.automated import model_for
-from bench.core.candidates import CANDIDATES_FOLDER, Candidate
+from bench.core.adapters import CandidateAdapter, CandidateReply, JudgeModel
+from bench.core.candidates import CANDIDATES_FOLDER, Candidate, model_for
 from bench.core.errors import (
     CandidateToolError,
     JudgeReplyError,
@@ -30,14 +30,13 @@ from bench.core.errors import (
     MissingSecret,
 )
 from bench.core.fields import FieldReader
-from bench.core.judging import JudgeModel, JudgeModelSpec, JudgeRequest
+from bench.core.judging import JudgeModelSpec, JudgeRequest
+from bench.core.kinds import Provider
+from bench.core.provider_registry import provider_of_tool
 from bench.core.rubric import Criterion
 
-ANTHROPIC = "anthropic"
-OPENAI = "openai"
-PROVIDERS = (ANTHROPIC, OPENAI)
-_TOOL_PROVIDERS = {"claude": ANTHROPIC, "anthropic": ANTHROPIC,
-                   "openai": OPENAI, "chatgpt": OPENAI, "gpt": OPENAI}
+# The providers whose SDKs are wired here, for Candidates and judge models alike.
+SUPPORTED = (Provider.ANTHROPIC, Provider.OPENAI)
 DEFAULT_MAX_TOKENS = 8192  # Anthropic requires a cap; used only when settings has none
 ENV_FILE = ".env"
 
@@ -146,15 +145,15 @@ class OpenAIJudge:
             )
         except openai.APIError as exc:
             raise JudgeUnavailable(
-                f"Judge openai/{self.model}: OpenAI {type(exc).__name__}: {exc}"
+                f"judge model openai/{self.model}: OpenAI {type(exc).__name__}: {exc}"
             ) from exc
         if response.status != "completed":
             raise JudgeReplyError(
-                f"Judge openai/{self.model}: reply is {response.status} "
+                f"judge model openai/{self.model}: reply is {response.status} "
                 f"({response.incomplete_details})"
             )
         if not response.output_text:
-            raise JudgeReplyError(f"Judge openai/{self.model}: reply has no text")
+            raise JudgeReplyError(f"judge model openai/{self.model}: reply has no text")
         return response.output_text
 
 
@@ -178,28 +177,31 @@ class AnthropicJudge:
             )
         except anthropic.APIError as exc:
             raise JudgeUnavailable(
-                f"Judge anthropic/{self.model}: Anthropic {type(exc).__name__}: {exc}"
+                f"judge model anthropic/{self.model}: Anthropic {type(exc).__name__}: {exc}"
             ) from exc
         if response.stop_reason != "end_turn":
             raise JudgeReplyError(
-                f"Judge anthropic/{self.model}: reply stopped on {response.stop_reason}"
+                f"judge model anthropic/{self.model}: reply stopped on {response.stop_reason}"
             )
         text = "".join(b.text for b in response.content if b.type == "text")
         if not text:
-            raise JudgeReplyError(f"Judge anthropic/{self.model}: reply has no text")
+            raise JudgeReplyError(f"judge model anthropic/{self.model}: reply has no text")
         return text
 
 
-def provider_for(candidate: Candidate) -> str:
+def provider_for(candidate: Candidate) -> Provider:
+    """The supported provider an automated Candidate calls; ConfigError naming
+    settings.provider otherwise."""
     f = _reader(candidate)
+    options = tuple(str(p) for p in SUPPORTED)
     if "provider" in candidate.settings:
-        return f.choice(candidate.settings["provider"], "settings.provider", PROVIDERS)
-    provider = _TOOL_PROVIDERS.get(candidate.tool.strip().lower())
-    if provider is None:
+        return Provider(f.choice(candidate.settings["provider"], "settings.provider", options))
+    provider = provider_of_tool(candidate.tool)
+    if provider not in SUPPORTED:
         raise f.fail(
             "settings.provider",
-            f"is missing and tool {candidate.tool!r} names no known provider; "
-            f"set one of {', '.join(PROVIDERS)}",
+            f"is missing and tool {candidate.tool!r} names no supported provider; "
+            f"set one of {', '.join(options)}",
         )
     return provider
 
@@ -225,7 +227,7 @@ def candidate_adapter(candidate: Candidate, root: Path) -> CandidateAdapter:
     options = {k: candidate.settings[k] for k in ("max_tokens", "temperature")
                if k in candidate.settings}
     model = model_for(candidate)
-    if provider == ANTHROPIC:
+    if provider == Provider.ANTHROPIC:
         return AnthropicAdapter(anthropic.Anthropic(api_key=key, max_retries=0), model,
                                 **options)
     return OpenAIAdapter(openai.OpenAI(api_key=key, max_retries=0), model, **options)
@@ -234,13 +236,13 @@ def candidate_adapter(candidate: Candidate, root: Path) -> CandidateAdapter:
 def judge_model(spec: JudgeModelSpec, root: Path) -> JudgeModel:
     """The SDK JudgeModel for a judge model of the Judge Setup, its API key read from
     spec.env_var per ADR-0005."""
-    if spec.provider not in PROVIDERS:
+    if spec.provider not in SUPPORTED:
         raise JudgeUnavailable(
-            f"Judge {spec.label}: no judge model for provider {spec.provider!r}; "
-            f"use one of {', '.join(PROVIDERS)}"
+            f"judge model {spec.label}: no SDK for provider {str(spec.provider)!r}; "
+            f"use one of {', '.join(map(str, SUPPORTED))}"
         )
     key = read_secret(spec.env_var, root)
-    if spec.provider == ANTHROPIC:
+    if spec.provider == Provider.ANTHROPIC:
         return AnthropicJudge(anthropic.Anthropic(api_key=key, max_retries=0), spec.model)
     return OpenAIJudge(openai.OpenAI(api_key=key, max_retries=0), spec.model)
 

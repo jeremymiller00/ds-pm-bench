@@ -1,32 +1,39 @@
 """DS PM Benchmark core library."""
 
 from bench.core.adapters import (
+    AdapterFactory,
     CandidateAdapter,
     CandidateReply,
     Clock,
     Editor,
     ExternalEditor,
+    JudgeModel,
+    JudgeModels,
     SystemClock,
 )
 from bench.core.attempts import Attempt
-from bench.core.automated import PendingOutput
+from bench.core.automated import ReturnedOutput
 from bench.core.errors import (
     AttemptError,
     CandidateAuthoringError,
     CandidateToolError,
+    CandidateUnavailable,
     ClearanceError,
     ConfigError,
     EditorError,
     GateNotPassed,
+    JudgeClearanceError,
     JudgeNotCertified,
     JudgeRefused,
     JudgeReplyError,
     JudgeSetupMismatch,
     JudgeUnavailable,
+    JudgingError,
     MissingSecret,
     RunExists,
     RunIncomplete,
     RunMismatch,
+    RunNotFinished,
     SuiteMismatch,
     SuiteUnavailable,
     TaskAuthoringError,
@@ -37,8 +44,6 @@ from bench.core.errors import (
     UnknownTaskError,
 )
 from bench.core.judging import (
-    JudgeModel,
-    JudgeModels,
     JudgeModelSpec,
     JudgeRequest,
     JudgeSetup,
@@ -50,12 +55,14 @@ from bench.core.verdicts import Comparison, Verdict
 from bench.core.workspace import Workspace
 
 __all__ = [
+    "AdapterFactory",
     "Attempt",
     "AttemptError",
     "CandidateAdapter",
     "CandidateAuthoringError",
     "CandidateReply",
     "CandidateToolError",
+    "CandidateUnavailable",
     "Clock",
     "Comparison",
     "ClearanceError",
@@ -64,6 +71,7 @@ __all__ = [
     "EditorError",
     "ExternalEditor",
     "GateNotPassed",
+    "JudgeClearanceError",
     "JudgeModel",
     "JudgeModelSpec",
     "JudgeModels",
@@ -74,11 +82,13 @@ __all__ = [
     "JudgeSetup",
     "JudgeSetupMismatch",
     "JudgeUnavailable",
+    "JudgingError",
     "MissingSecret",
-    "PendingOutput",
+    "ReturnedOutput",
     "RunExists",
     "RunIncomplete",
     "RunMismatch",
+    "RunNotFinished",
     "RunScore",
     "SuiteMismatch",
     "SystemClock",

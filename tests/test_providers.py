@@ -8,7 +8,7 @@ import openai
 import pytest
 
 from bench import CandidateReply, CandidateToolError, ConfigError, MissingSecret, Workspace
-from bench.core.providers import AnthropicAdapter, OpenAIAdapter, candidate_adapter
+from bench.providers import AnthropicAdapter, OpenAIAdapter, candidate_adapter
 from test_workspace_candidates import candidate, write_candidate
 
 REQUEST = None  # the SDK errors only keep the request for display
