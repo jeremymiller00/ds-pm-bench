@@ -51,3 +51,11 @@ class Provider(StrEnum):
     ANTHROPIC = "anthropic"
     OPENAI = "openai"
     GOOGLE = "google"
+
+
+class EntryKind(StrEnum):
+    """What a Decision Log entry records."""
+
+    VERDICT = "verdict"
+    JUDGE_CERTIFICATION = "judge_certification"
+    UNCERTIFIED_JUDGE_OVERRIDE = "uncertified_judge_override"

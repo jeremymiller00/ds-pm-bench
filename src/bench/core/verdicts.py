@@ -2,14 +2,16 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
+from typing import Any
 
 from bench.core.candidates import Candidate
 from bench.core.errors import SpotChecksUnfinished, SuiteMismatch
 from bench.core.kinds import Suite, Visibility
 from bench.core.runs import Run, SpotCheck
 from bench.core.scoring import RunScore
-from bench.core.settings import Settings
+from bench.core.settings import DIMENSIONS, Settings
 
 OUTCOMES = ("adopt", "reject", "re-test")
 
@@ -50,12 +52,93 @@ class Verdict:
 
 
 @dataclass(frozen=True)
+class ScoreRow:
+    """One scorecard line: the challenger's and the Baseline's score."""
+
+    challenger: float
+    baseline: float
+
+    @property
+    def delta(self) -> float:
+        return self.challenger - self.baseline
+
+
+@dataclass(frozen=True)
+class Scorecard:
+    """What a Verdict was reached on, as the Decision Log keeps it (story 59): each
+    Dimension with its weight, the weighted total, each Track's quality, the margins in
+    force and the scoring notes. The rationale and Regressions are the Verdict's."""
+
+    weights: Mapping[str, float]
+    regression_margin: float
+    retest_margin: float
+    dimensions: Mapping[str, ScoreRow]
+    weighted: ScoreRow
+    track_quality: Mapping[str, ScoreRow]
+    challenger_notes: tuple[str, ...] = ()
+    baseline_notes: tuple[str, ...] = ()
+
+    @classmethod
+    def of(cls, settings: Settings, challenger: RunScore, baseline: RunScore) -> Scorecard:
+        return cls(
+            weights=dict(settings.weights),
+            regression_margin=settings.regression_margin,
+            retest_margin=settings.retest_margin,
+            dimensions={d: ScoreRow(challenger.dimensions[d], baseline.dimensions[d])
+                        for d in DIMENSIONS},
+            weighted=ScoreRow(challenger.weighted, baseline.weighted),
+            track_quality={
+                track: ScoreRow(challenger.track_quality.get(track, quality), quality)
+                for track, quality in baseline.track_quality.items()
+            },
+            challenger_notes=challenger.notes,
+            baseline_notes=baseline.notes,
+        )
+
+    def data(self) -> dict[str, Any]:
+        """The scorecard as plain data, for the Decision Log."""
+        return {
+            "weights": dict(self.weights),
+            "margins": {"regression_margin": self.regression_margin,
+                        "retest_margin": self.retest_margin},
+            "dimensions": {d: _row_data(r) for d, r in self.dimensions.items()},
+            "weighted": _row_data(self.weighted),
+            "track_quality": {t: _row_data(r) for t, r in self.track_quality.items()},
+            "notes": {"challenger": list(self.challenger_notes),
+                      "baseline": list(self.baseline_notes)},
+        }
+
+    @classmethod
+    def from_data(cls, data: Mapping[str, Any]) -> Scorecard:
+        """A scorecard read back from a Decision Log entry, exactly as logged."""
+        def row(d: Mapping[str, Any]) -> ScoreRow:
+            return ScoreRow(d["challenger"], d["baseline"])
+
+        notes = data.get("notes") or {}
+        return cls(
+            weights=dict(data["weights"]),
+            regression_margin=data["margins"]["regression_margin"],
+            retest_margin=data["margins"]["retest_margin"],
+            dimensions={d: row(r) for d, r in data["dimensions"].items()},
+            weighted=row(data["weighted"]),
+            track_quality={t: row(r) for t, r in data["track_quality"].items()},
+            challenger_notes=tuple(notes.get("challenger", ())),
+            baseline_notes=tuple(notes.get("baseline", ())),
+        )
+
+
+def _row_data(row: ScoreRow) -> dict[str, float]:
+    return {"challenger": row.challenger, "baseline": row.baseline, "delta": row.delta}
+
+
+@dataclass(frozen=True)
 class Comparison:
     challenger: Run
     baseline: Run
     challenger_score: RunScore
     baseline_score: RunScore
     verdict: Verdict
+    scorecard: Scorecard
 
     @property
     def judge_setup_hash(self) -> str | None:
@@ -113,6 +196,26 @@ def compare(
         challenger_score=challenger_score,
         baseline_score=baseline_score,
         verdict=verdict,
+        scorecard=Scorecard.of(settings, challenger_score, baseline_score),
+    )
+
+
+def verdict_from_entry(entry: Mapping[str, Any]) -> Verdict:
+    """The Verdict a Decision Log verdict entry records, rebuilt as logged."""
+    runs = entry.get("runs") or {}
+    return Verdict(
+        outcome=entry["verdict"],
+        suite=None if entry.get("suite") is None else Suite(entry["suite"]),
+        rationale=tuple(entry.get("rationale") or ()),
+        candidate_id=entry["candidate"]["id"],
+        candidate_version=entry["candidate"]["version"],
+        baseline_id=entry["baseline"]["id"],
+        baseline_version=entry["baseline"]["version"],
+        private_tasks=entry.get("private_tasks", 0),
+        regressions=tuple(entry.get("regressions") or ()),
+        challenger_run_id=runs.get("challenger"),
+        baseline_run_id=runs.get("baseline"),
+        warnings=tuple(entry.get("warnings") or ()),
     )
 
 

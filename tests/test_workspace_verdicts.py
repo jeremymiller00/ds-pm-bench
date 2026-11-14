@@ -370,3 +370,22 @@ def test_the_decision_log_is_append_only(ws_dir: Path):
         "adopt",
         "re-test",
     ]
+
+
+def test_a_logged_comparison_keeps_its_scorecard(ws_dir: Path):
+    ws = Workspace.open(ws_dir)
+    comparison = compare(ws_dir, quality={"T1.1": 5, "T2.1": 3.4})
+
+    entry = yaml.safe_load(ws.log_comparison(comparison, on=DAY).read_text())
+
+    card = entry["scorecard"]
+    assert card["weights"] == {"quality": 50, "edit_distance": 20, "time_saved": 20,
+                               "cost_latency": 10}
+    assert card["margins"] == {"regression_margin": 0.5, "retest_margin": 0.2}
+    assert card["dimensions"]["quality"] == pytest.approx(
+        {"challenger": 4.2, "baseline": 4.0, "delta": 0.2})
+    assert card["track_quality"]["Specs"] == pytest.approx(
+        {"challenger": 3.4, "baseline": 4.0, "delta": -0.6})
+    assert card["weighted"]["delta"] == pytest.approx(0.1)
+    assert entry["regressions"] == ["Specs"]
+    assert entry["rationale"] == list(comparison.verdict.rationale)

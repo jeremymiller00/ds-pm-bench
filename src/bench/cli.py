@@ -111,19 +111,24 @@ def _verdict(ws: Workspace, args: argparse.Namespace) -> int:
         if args.runs:
             raise ValueError("--gate takes no Runs")
         verdict = ws.gate_verdict(args.gate)
-        judge_setup_hash = args.judge_setup_hash
-    else:
-        if len(args.runs) != 2:
-            raise ValueError("give CHALLENGER_RUN and BASELINE_RUN, or --gate CANDIDATE")
-        challenger, baseline = args.runs
-        comparison = ws.compare(challenger, baseline)
-        verdict = comparison.verdict
-        judge_setup_hash = args.judge_setup_hash or comparison.judge_setup_hash
-    _print_verdict(verdict)
+        _print_verdict(verdict)
+        if args.log:
+            _print_logged(ws, ws.log_verdict(verdict, on=args.on,
+                                             judge_setup_hash=args.judge_setup_hash))
+        return 0
+    if len(args.runs) != 2:
+        raise ValueError("give CHALLENGER_RUN and BASELINE_RUN, or --gate CANDIDATE")
+    challenger, baseline = args.runs
+    comparison = ws.compare(challenger, baseline)
+    _print_verdict(comparison.verdict)
     if args.log:
-        path = ws.log_verdict(verdict, on=args.on, judge_setup_hash=judge_setup_hash)
-        print(f"logged: {path.relative_to(ws.root)}")
+        _print_logged(ws, ws.log_comparison(comparison, on=args.on,
+                                            judge_setup_hash=args.judge_setup_hash))
     return 0
+
+
+def _print_logged(ws: Workspace, path: Path) -> None:
+    print(f"logged: {path.relative_to(ws.root)}")
 
 
 def _scaffold_catalog(ws: Workspace, args: argparse.Namespace) -> int:

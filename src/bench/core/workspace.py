@@ -961,6 +961,21 @@ class Workspace:
         """Append a Verdict to the Decision Log; returns the new entry's file."""
         return log_verdict(self.root, verdict, on or self.clock.today(), judge_setup_hash)
 
+    def log_comparison(
+        self,
+        comparison: Comparison,
+        *,
+        on: datetime.date | None = None,
+        judge_setup_hash: str | None = None,
+    ) -> Path:
+        """Append a Comparison's Verdict to the Decision Log with the scorecard it was
+        reached on (story 59), so the entry can be shown as logged; judge_setup_hash
+        defaults to the Judge Setup that scored both Runs."""
+        return log_verdict(
+            self.root, comparison.verdict, on or self.clock.today(),
+            judge_setup_hash or comparison.judge_setup_hash, comparison.scorecard,
+        )
+
     def decision_log(self) -> tuple[dict[str, Any], ...]:
         """Every Decision Log entry, oldest first, as written to decisions/."""
         return read_log(self.root)

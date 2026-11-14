@@ -19,8 +19,9 @@ import yaml
 
 from bench.core.calibration import Agreement, CriterionAgreement
 from bench.core.judging import JudgeSetup
+from bench.core.kinds import EntryKind
 from bench.core.lookup import next_number
-from bench.core.verdicts import Verdict
+from bench.core.verdicts import Scorecard, Verdict
 
 DECISIONS_FOLDER = "decisions"
 
@@ -28,9 +29,32 @@ _ENTRY = re.compile(r"^(\d{4,})-")
 
 
 def log_verdict(
-    root: Path, verdict: Verdict, date: datetime.date, judge_setup_hash: str | None
+    root: Path,
+    verdict: Verdict,
+    date: datetime.date,
+    judge_setup_hash: str | None,
+    scorecard: Scorecard | None = None,
 ) -> Path:
-    return _append(root, date, verdict.candidate_id, _entry(verdict, date, judge_setup_hash))
+    """Log a Verdict, with the scorecard it was reached on when it came from a
+    Comparison (a Gate Verdict has none)."""
+    entry = _entry(verdict, date, judge_setup_hash)
+    if scorecard is not None:
+        entry["scorecard"] = scorecard.data()
+    return _append(root, date, verdict.candidate_id, entry)
+
+
+def entry_kind(entry: dict[str, Any]) -> EntryKind | None:
+    """What the entry records; None for a kind this version does not know."""
+    try:
+        return EntryKind(entry.get("kind"))
+    except ValueError:
+        return None
+
+
+def logged_scorecard(entry: dict[str, Any]) -> Scorecard | None:
+    """The scorecard a verdict entry was logged with; None if it has none."""
+    data = entry.get("scorecard")
+    return None if data is None else Scorecard.from_data(data)
 
 
 def log_override(
@@ -38,7 +62,7 @@ def log_override(
 ) -> Path:
     """Log judging a Run with an uncertified Judge Setup (ADR-0002)."""
     return _append(root, date, candidate_id, {
-        "kind": "uncertified_judge_override",
+        "kind": str(EntryKind.UNCERTIFIED_JUDGE_OVERRIDE),
         "date": date.isoformat(),
         "run": run_id,
         "candidate": {"id": candidate_id},
@@ -49,7 +73,7 @@ def log_override(
 def override_logged(root: Path, run_id: str, judge_setup_hash: str) -> bool:
     """Whether judging the Run with this Judge Setup's uncertified override is logged."""
     return any(
-        e.get("kind") == "uncertified_judge_override"
+        entry_kind(e) == EntryKind.UNCERTIFIED_JUDGE_OVERRIDE
         and e.get("run") == run_id
         and e.get("judge_setup_hash") == judge_setup_hash
         for e in read_log(root)
@@ -65,7 +89,7 @@ def log_certification(
 ) -> Path:
     """Log a Judge Setup's Certification on the Calibration Set (ADR-0002)."""
     return _append(root, date, f"judge-{setup.hash}", {
-        "kind": "judge_certification",
+        "kind": str(EntryKind.JUDGE_CERTIFICATION),
         "date": date.isoformat(),
         "judge_setup_hash": setup.hash,
         "judge_setup": setup.snapshot(),
@@ -84,7 +108,8 @@ def certified(root: Path, judge_setup_hash: str) -> bool:
     """Whether a Certification of this Judge Setup is logged; a changed Judge Setup has a
     new hash, so it is uncertified until certified itself."""
     return any(
-        e.get("kind") == "judge_certification" and e.get("judge_setup_hash") == judge_setup_hash
+        entry_kind(e) == EntryKind.JUDGE_CERTIFICATION
+        and e.get("judge_setup_hash") == judge_setup_hash
         for e in read_log(root)
     )
 
@@ -123,7 +148,7 @@ def _entry(
     verdict: Verdict, date: datetime.date, judge_setup_hash: str | None
 ) -> dict[str, Any]:
     return {
-        "kind": "verdict",
+        "kind": str(EntryKind.VERDICT),
         "date": date.isoformat(),
         "candidate": {"id": verdict.candidate_id, "version": verdict.candidate_version},
         "baseline": {"id": verdict.baseline_id, "version": verdict.baseline_version},
