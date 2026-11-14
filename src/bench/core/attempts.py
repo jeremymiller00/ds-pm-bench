@@ -11,6 +11,7 @@ Abandoning records nothing, so the Task can be begun again until it is finished.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from enum import StrEnum
 
 from bench.core.adapters import Clock, Editor
@@ -26,13 +27,22 @@ class AttemptState(StrEnum):
 
 class Attempt:
     def __init__(
-        self, run: Run, task_id: str, prompt: str, clock: Clock, editor: Editor
+        self,
+        run: Run,
+        task_id: str,
+        prompt: str,
+        clock: Clock,
+        editor: Editor,
+        check_permitted: Callable[[], None],
     ) -> None:
         self.run = run
         self.task_id = task_id
         self.prompt = prompt  # the Canonical Prompt then the input, to show the person
         self._clock = clock
         self._editor = editor
+        # Re-checks the Candidate's latest Gate and Clearance (ADR-0003): raises if a
+        # review since begin has failed or narrowed it.
+        self._check_permitted = check_permitted
         self._started = clock.now()
         self._paused_seconds = 0.0
         self._paused_at: float | None = None
@@ -91,9 +101,11 @@ class Attempt:
         """Save raw and final (the draft when final is omitted) with timings and cost.
 
         A pause still open at save time does not count as active time. The Attempt is
-        then over.
+        then over. A Gate failed or narrowed since begin refuses the save
+        (GateNotPassed, ClearanceError) and records nothing.
         """
         raw = self._need_raw("finish")
+        self._check_permitted()
         if self.task_id not in self.run.pending:
             raise AttemptError(f"Task {self.task_id}: its Output is already recorded")
         record = self.run.record_output(

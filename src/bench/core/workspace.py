@@ -493,7 +493,13 @@ class Workspace:
         prompt = self.task_input(run, task_id)
         if task_id not in run.pending:
             raise AttemptError(f"Run {run.id}: Task {task_id}'s Output is already recorded")
-        return Attempt(run, task_id, prompt, self.clock, self.editor)
+
+        def check_permitted() -> None:
+            candidate = self.candidate(run.candidate_id)  # its latest Gate review
+            check_gate(candidate)
+            check_clearance(candidate, self.task(task_id))
+
+        return Attempt(run, task_id, prompt, self.clock, self.editor, check_permitted)
 
     def run_ids(self) -> tuple[str, ...]:
         """The id of every Run under runs/, newest first, for choosing one to resume."""

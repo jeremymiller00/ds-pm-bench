@@ -327,6 +327,20 @@ def test_a_failed_gate_stops_an_open_run_beginning_a_task(ws_dir: Path, clock: F
         ws.begin_manual_task(run, "T1.1")
 
 
+def test_an_attempt_open_when_the_gate_fails_cannot_save(ws_dir: Path, clock: FakeClock):
+    ws = open_ws(ws_dir, clock)
+    run = ws.start_run(CANDIDATE, on=DAY)
+    attempt = ws.begin_manual_task(run, "T1.1")
+    attempt.submit_raw("a draft")
+
+    ws.record_gate(CANDIDATE, reviewer="A. Nother", on=DAY, checklist=CHECKLIST,
+                   passed=False, clearance=None)
+
+    with pytest.raises(GateNotPassed):
+        attempt.finish()
+    assert "T1.1" in run.pending  # nothing was recorded
+
+
 def test_a_run_of_an_automated_candidate_cannot_be_worked_by_hand(
     workspace_dir: Path, clock: FakeClock
 ):
