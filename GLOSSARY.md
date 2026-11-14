@@ -69,7 +69,11 @@ The Candidate designated as the incumbent that challengers must beat, currently 
 _Avoid_: Control, reference
 
 **Adapter**:
-The way a Candidate is driven: automated (API or CLI) or manual-assisted, where a person pastes the Output back.
+The boundary through which the harness reaches anything outside itself: a Candidate, a Judge, the clock or the editor. A Candidate's Adapter is automated (API or CLI) or manual-assisted, where a person pastes the Output back.
+
+**Lineage**:
+The sequence of Candidates produced by changing one Candidate. Each change adds a new Candidate to the Lineage, and only the latest is current.
+_Avoid_: History, family
 
 ### Running and deciding
 
@@ -95,6 +99,10 @@ What a Candidate returned for a Task, kept as the raw version and the edited fin
 **Task Result**:
 The numbers recorded for one Task in a Run: Criterion scores, Edit Distance, active time, Manual Time, cost and latency.
 _Avoid_: Result (alone), outcome
+
+**Attempt**:
+One manual-assisted pass at a Task within a Run, from showing the Canonical Prompt to saving the final. An Attempt can be abandoned, which records nothing.
+_Avoid_: Session
 
 **Comparison**:
 A challenger Run paired with a Baseline Run from the same week, over the same Suite. The Verdict belongs to a Comparison, never to a single Run.

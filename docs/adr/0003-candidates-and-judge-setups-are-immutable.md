@@ -5,3 +5,7 @@ A Candidate (tool, exact model or version, settings), a Task version and a Judge
 ## Task versions are archived, not only kept in git history
 
 When an edit bumps a Task that a Run used, the used version is first copied into the Task's own `versions/<n>/` folder, so a Run can always load the exact Task version it used, whether or not anyone committed before editing. Relying on git history alone was rejected: an uncommitted edit would make a past Run unreadable, and a Run would need a commit pointer as well as a version number. The archive sits beside the Task, so a Private Task's old versions stay in its private root.
+
+## The Gate is a review record, not part of a Candidate
+
+A Candidate's identity is its tool, exact version and settings. Its Gate is a dated review of that Candidate, so re-reviewing the Gate updates it in place and keeps every earlier review, rather than creating a new Candidate. The latest review applies immediately to every Run, including one in progress: a failed or narrowed Gate stops a Run from continuing or seeing Private Task inputs. Treating a re-review as a new Candidate was rejected because it let a Run started under the old Gate keep its old permissions.
