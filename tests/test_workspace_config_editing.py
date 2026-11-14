@@ -308,3 +308,16 @@ def test_a_written_judge_setup_keeps_its_header_and_key_order(workspace_dir: Pat
     text = path.read_text()
     assert text.startswith("# The Judge Setup")
     assert list(yaml.safe_load(text)) == order
+
+
+def test_an_edit_changes_only_the_edited_settings_lines_keeping_every_comment(
+    workspace_dir: Path,
+):
+    path = workspace_dir / "config" / "settings.yaml"
+    before = path.read_text().splitlines()
+
+    Workspace.open(workspace_dir).update_settings(retest_margin=0.3)
+
+    after = path.read_text().splitlines()
+    changed = [(a, b) for a, b in zip(before, after, strict=True) if a != b]
+    assert changed == [("retest_margin: 0.2", "retest_margin: 0.3")]
