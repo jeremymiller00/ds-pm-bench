@@ -6,14 +6,17 @@ and nothing is written. The form only reads its fields and sends what changed.
 
 from __future__ import annotations
 
+import yaml
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Vertical, VerticalScroll
 from textual.css.query import NoMatches
 from textual.widget import Widget
-from textual.widgets import Button, DataTable, Input, Label, Select, Static
+from textual.widgets import Button, DataTable, Input, Label, Select, Static, TextArea
 
 from bench.core.errors import ConfigError
+from bench.core.judging import JudgeSetup, family_of
+from bench.core.kinds import Clearance, JudgeMode
 from bench.core.settings import BANDED_MEASURES, DIMENSIONS, Settings
 from bench.core.workspace import Workspace
 from bench.tui.task_editor import FormError
@@ -21,6 +24,7 @@ from bench.tui.task_editor import FormError
 SETTINGS_CSS = """
 SettingsPane { height: 1fr; }
 SettingsPane .settings-section { height: auto; border: round $accent; padding: 0 1; }
+SettingsPane TextArea { height: 6; }
 SettingsPane .form-error { color: $error; }
 SettingsPane .warning { color: $warning; }
 """
@@ -71,6 +75,31 @@ def weight_sum(texts: list[str]) -> str:
     return f"Sum: {fmt(total)}" + ("" if total == 100 else " (must be 100)")
 
 
+def models_yaml(setup: JudgeSetup | None) -> str:
+    """The judge models as config/judge.yaml lists them; family only when not the default."""
+    if setup is None:
+        return ""
+    models = []
+    for spec in setup.models:
+        entry = {"provider": str(spec.provider), "model": spec.model}
+        if spec.family != family_of(spec.provider):
+            entry["family"] = list(spec.family)
+        if spec.env_var:
+            entry["env_var"] = spec.env_var
+        models.append(entry)
+    return yaml.safe_dump(models, sort_keys=False)
+
+
+def parse_models(text: str) -> list[dict]:
+    try:
+        models = yaml.safe_load(text)
+    except yaml.YAMLError as error:
+        raise FieldError("models", f"not valid YAML: {error}") from None
+    if not isinstance(models, list):
+        raise FieldError("models", "must be a YAML list of {provider, model}")
+    return models
+
+
 def error_slot(field: str) -> str:
     """Which inline error a field's error shows in: its top-level setting, or its band."""
     head = field.split("[")[0].split(".")
@@ -94,6 +123,8 @@ class SettingsPane(VerticalScroll):
             yield from self._compose_settings()
         with Vertical(id="prices-form", classes="settings-section"):
             yield from self._compose_prices()
+        with Vertical(id="judge-form", classes="settings-section"):
+            yield from self._compose_judge()
 
     def _compose_settings(self) -> ComposeResult:
         settings = self.workspace.settings
@@ -185,6 +216,68 @@ class SettingsPane(VerticalScroll):
             return
         self._list_prices()
 
+    def _compose_judge(self) -> ComposeResult:
+        setup = self.workspace.judge_setup
+        yield Static("Judge Setup (config/judge.yaml).", markup=False)
+        yield Static(self._judge_status(), id="judge-status", markup=False)
+        yield Static(
+            "Changing the models or the prompt makes a new Judge Setup, which drops its "
+            "Certification until it is recalibrated. Mode and clearance do not.",
+            id="judge-warning", classes="warning", markup=False,
+        )
+        yield Label("Mode")
+        yield Select([(str(m), str(m)) for m in JudgeMode], allow_blank=setup is None,
+                     value=str(setup.mode) if setup else Select.NULL, id="judge-mode")
+        yield Label("Clearance")
+        yield Select([(str(c), str(c)) for c in Clearance], allow_blank=setup is None,
+                     value=str(setup.clearance) if setup else Select.NULL,
+                     id="judge-clearance")
+        yield Label("Models (YAML list of provider, model, optional family and env_var)")
+        yield TextArea(models_yaml(setup), id="judge-models")
+        yield Label("Prompt file (relative to the Workspace root)")
+        yield Input(setup.prompt_file if setup else "", id="judge-prompt-file")
+        yield Label("Prompt")
+        yield TextArea(setup.prompt if setup else "", id="judge-prompt")
+        yield Static("", id="err-judge", classes="form-error", markup=False)
+        yield Button("Save Judge Setup", id="judge-save", variant="primary")
+
+    def _judge_status(self, note: str = "") -> str:
+        setup = self.workspace.judge_setup
+        if setup is None:
+            return "No Judge Setup yet: fill the form to create one."
+        state = "certified" if self.workspace.judge_certified else "not certified"
+        return f"Judge Setup {setup.hash}: {state}." + (f" {note}" if note else "")
+
+    def save_judge_setup(self) -> None:
+        self._clear_errors("judge-form")
+        setup = self.workspace.judge_setup
+        was_certified = self.workspace.judge_certified
+        changes: dict[str, object] = {}
+        for key in ("mode", "clearance"):
+            value = self.query_one(f"#judge-{key}", Select).value
+            current = getattr(setup, key, None) if setup else None
+            if value != Select.NULL and value != current:
+                changes[key] = value
+        models = self.query_one("#judge-models", TextArea).text
+        prompt_file = self._value("judge-prompt-file").strip()
+        prompt = self.query_one("#judge-prompt", TextArea).text
+        try:
+            if models != models_yaml(setup):
+                changes["models"] = parse_models(models)
+            if prompt_file != (setup.prompt_file if setup else ""):
+                changes["prompt_file"] = prompt_file
+            if prompt != (setup.prompt if setup else ""):
+                changes["prompt"] = prompt
+            self.workspace.update_judge_setup(**changes)
+        except (FormError, ConfigError) as error:
+            self._show_error(error, "judge-form", "err-judge")
+            return
+        dropped = was_certified and not self.workspace.judge_certified
+        note = ("Certification dropped: recalibrate and certify this Judge Setup."
+                if dropped else "Saved.")
+        self.query_one("#judge-status", Static).update(self._judge_status(note))
+        self.query_one("#judge-models", TextArea).text = models_yaml(self.workspace.judge_setup)
+
     # Live weight sum: display only; the Workspace decides whether it is valid.
 
     def on_input_changed(self, event: Input.Changed) -> None:
@@ -196,7 +289,7 @@ class SettingsPane(VerticalScroll):
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         saves = {"settings-save": self.save_settings, "price-save": self.set_price,
-                 "price-remove": self.remove_price}
+                 "price-remove": self.remove_price, "judge-save": self.save_judge_setup}
         if event.button.id in saves:
             saves[event.button.id]()
 
@@ -204,7 +297,8 @@ class SettingsPane(VerticalScroll):
         focused = self.app.focused
         section = next((w for w in (focused.ancestors if focused else ())
                         if isinstance(w, Widget) and w.has_class("settings-section")), None)
-        saves = {"settings-form": self.save_settings, "prices-form": self.set_price}
+        saves = {"settings-form": self.save_settings, "prices-form": self.set_price,
+                 "judge-form": self.save_judge_setup}
         if section is not None and section.id in saves:
             saves[section.id]()
 
