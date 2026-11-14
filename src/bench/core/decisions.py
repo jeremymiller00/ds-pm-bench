@@ -41,6 +41,16 @@ def log_override(
     })
 
 
+def override_logged(root: Path, run_id: str, judge_setup_hash: str) -> bool:
+    """Whether judging the Run with this Judge Setup's uncertified override is logged."""
+    return any(
+        e.get("kind") == "uncertified_judge_override"
+        and e.get("run") == run_id
+        and e.get("judge_setup_hash") == judge_setup_hash
+        for e in read_log(root)
+    )
+
+
 def _append(root: Path, date: datetime.date, candidate_id: str, entry: dict[str, Any]) -> Path:
     folder = root / DECISIONS_FOLDER
     folder.mkdir(exist_ok=True)

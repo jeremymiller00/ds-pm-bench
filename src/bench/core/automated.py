@@ -1,40 +1,40 @@
-"""One Task of an automated Run: send, retry once on a tool error, store pending the edit.
+"""One Task of an automated Run: send, retry once on a tool error, keep the Returned Output.
 
 Workspace.run_automated_task sends the Canonical Prompt and input word for word through
-the Candidate's Adapter, timing it with the Clock. A tool error is retried exactly once
-(story 22); a second error raises and stores nothing. The raw Output is then stored as a
-Pending Output, which the edit pass (an Attempt that starts with the raw Output already
-returned) turns into the Task's recorded Output:
+the Candidate's Adapter, timing each try with the Clock. A tool error is retried exactly
+once (story 22); a second error raises and stores nothing. The raw Output is then stored
+as a Returned Output, which an Attempt (one that starts with the raw Output already
+returned) edits into the Task's recorded Output:
 
-  runs/<id>/pending/<task>.yaml   numbers only: latency, tokens, model, cost, tries
+  runs/<id>/returned/<task>.yaml  numbers only: latency, tokens, model, cost, tries
   <content folder>/raw/<task>.md  the raw Output (the private root for a Private Task)
 """
 
 from __future__ import annotations
 
-from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
 import yaml
 
 from bench.core.adapters import CandidateAdapter, CandidateReply, Clock
-from bench.core.candidates import Candidate
+from bench.core.candidates import model_for
 from bench.core.errors import CandidateToolError
 from bench.core.prices import PRICES_FILE, PriceTable
-from bench.core.runs import Run
+from bench.core.runs import ProviderCall, Run
 
-PENDING_FOLDER = "pending"
+RETURNED_FOLDER = "returned"
 TRIES = 2  # the first try and exactly one automatic retry
 
 
 @dataclass(frozen=True)
-class PendingOutput:
-    """An automated Candidate's raw Output for a Task, awaiting its edit pass."""
+class ReturnedOutput:
+    """The raw Output an automated Candidate sent back for a Task, waiting for an
+    Attempt to edit it into the final."""
 
     task_id: str
     raw: str
-    latency_seconds: float  # from the first send to the reply, a failed try included
+    latency_seconds: float  # the successful call only; a failed try is not counted
     input_tokens: int
     output_tokens: int
     model: str
@@ -42,10 +42,16 @@ class PendingOutput:
     cost_note: str | None  # why cost_usd is None
     tries: int  # 1, or 2 after the one retry
 
-
-def model_for(candidate: Candidate) -> str:
-    """The model id an automated Candidate calls: settings.model, else its version."""
-    return str(candidate.settings.get("model") or candidate.version)
+    @property
+    def call(self) -> ProviderCall:
+        """What the Task Result keeps of the provider call once the Output is recorded."""
+        return ProviderCall(
+            model=self.model,
+            input_tokens=self.input_tokens,
+            output_tokens=self.output_tokens,
+            tries=self.tries,
+            cost_note=self.cost_note,
+        )
 
 
 def cost_of(prices: PriceTable, model: str, reply: CandidateReply) -> tuple[float | None,
@@ -59,14 +65,20 @@ def cost_of(prices: PriceTable, model: str, reply: CandidateReply) -> tuple[floa
     return cost, None
 
 
-def send_with_one_retry(adapter: CandidateAdapter, text: str) -> tuple[CandidateReply, int]:
-    """The reply and how many tries it took; the second CandidateToolError propagates."""
-    for attempt in range(1, TRIES + 1):
+def send_with_one_retry(
+    adapter: CandidateAdapter, text: str, clock: Clock
+) -> tuple[CandidateReply, float, int]:
+    """The reply, the seconds the successful call took, and how many tries it took;
+    the second CandidateToolError propagates."""
+    for try_ in range(1, TRIES + 1):
+        started = clock.now()
         try:
-            return adapter.send(text), attempt
+            reply = adapter.send(text)
         except CandidateToolError:
-            if attempt == TRIES:
+            if try_ == TRIES:
                 raise
+            continue
+        return reply, clock.now() - started, try_
     raise AssertionError("unreachable")
 
 
@@ -77,20 +89,18 @@ def run_task(
     adapter: CandidateAdapter,
     clock: Clock,
     prices: PriceTable,
-) -> PendingOutput:
-    """Send the prompt, then store and return the Pending Output."""
+) -> ReturnedOutput:
+    """Send the prompt, then store and return the Returned Output."""
     model = model_for(run.candidate)
-    started = clock.now()
     try:
-        reply, tries = send_with_one_retry(adapter, prompt)
+        reply, latency, tries = send_with_one_retry(adapter, prompt, clock)
     except CandidateToolError as exc:
         raise CandidateToolError(
             f"Run {run.id}: Task {task_id}: the Candidate's tool errored twice, "
             f"so nothing was stored: {exc}"
         ) from exc
-    latency = clock.now() - started
     cost, note = cost_of(prices, model, reply)
-    pending = PendingOutput(
+    returned = ReturnedOutput(
         task_id=task_id,
         raw=reply.text,
         latency_seconds=latency,
@@ -101,12 +111,12 @@ def run_task(
         cost_note=note,
         tries=tries,
     )
-    _save(run, pending)
-    return pending
+    _save(run, returned)
+    return returned
 
 
-def load_pending(run: Run, task_id: str) -> PendingOutput | None:
-    """The Task's Pending Output, or None if it has none."""
+def load_returned(run: Run, task_id: str) -> ReturnedOutput | None:
+    """The Task's Returned Output, or None if it has none."""
     task = run.task(task_id)
     path = _numbers_file(run, task_id)
     if not path.is_file():
@@ -114,21 +124,21 @@ def load_pending(run: Run, task_id: str) -> PendingOutput | None:
     numbers = yaml.safe_load(path.read_text())
     numbers.pop("visibility")
     raw = _raw_file(run, task_id).read_text()
-    return PendingOutput(task_id=task.id, raw=raw, **numbers)
+    return ReturnedOutput(task_id=task.id, raw=raw, **numbers)
 
 
-def discard_pending(run: Run, task_id: str) -> None:
-    """Remove a Task's Pending Output numbers once its edit pass records the Output.
+def discard_returned(run: Run, task_id: str) -> None:
+    """Remove a Task's Returned Output numbers once an Attempt records the Output.
     The raw file stays: it is where the recorded raw Output lives too."""
     _numbers_file(run, task_id).unlink(missing_ok=True)
 
 
-def _save(run: Run, pending: PendingOutput) -> None:
-    task = run.task(pending.task_id)
+def _save(run: Run, returned: ReturnedOutput) -> None:
+    task = run.task(returned.task_id)
     raw = _raw_file(run, task.id)
     raw.parent.mkdir(parents=True, exist_ok=True)
-    raw.write_text(pending.raw)
-    numbers = {k: v for k, v in asdict(pending).items() if k not in ("task_id", "raw")}
+    raw.write_text(returned.raw)
+    numbers = {k: v for k, v in asdict(returned).items() if k not in ("task_id", "raw")}
     numbers["visibility"] = str(task.visibility)
     path = _numbers_file(run, task.id)
     path.parent.mkdir(exist_ok=True)
@@ -136,11 +146,8 @@ def _save(run: Run, pending: PendingOutput) -> None:
 
 
 def _numbers_file(run: Run, task_id: str) -> Path:
-    return run.folder / PENDING_FOLDER / f"{task_id}.yaml"
+    return run.folder / RETURNED_FOLDER / f"{task_id}.yaml"
 
 
 def _raw_file(run: Run, task_id: str) -> Path:
     return run.content_folder(run.task(task_id)) / "raw" / f"{task_id}.md"
-
-
-AdapterFactory = Callable[[Candidate], CandidateAdapter]

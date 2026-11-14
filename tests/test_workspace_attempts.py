@@ -73,7 +73,7 @@ def test_a_manual_task_records_latency_to_paste_and_active_time_to_save(
     ws = open_ws(ws_dir, clock)
     run = ws.start_run(CANDIDATE, on=DAY)
 
-    attempt = ws.begin_manual_task(run, "T1.1")
+    attempt = ws.begin_attempt(run, "T1.1")
     assert attempt.prompt == (
         "Frame this business problem as a data problem.\n\n"
         "Churn rose 4% last quarter in the SMB segment."
@@ -98,7 +98,7 @@ def test_a_manual_task_records_latency_to_paste_and_active_time_to_save(
 def test_pauses_in_the_built_in_editor_are_not_active_time(ws_dir: Path, clock: FakeClock):
     ws = open_ws(ws_dir, clock)
     run = ws.start_run(CANDIDATE, on=DAY)
-    attempt = ws.begin_manual_task(run, "T1.1")
+    attempt = ws.begin_attempt(run, "T1.1")
     clock.advance(60)
     attempt.submit_raw("raw")
     clock.advance(100)
@@ -119,7 +119,7 @@ def test_pauses_in_the_built_in_editor_are_not_active_time(ws_dir: Path, clock: 
 
 def test_pausing_is_only_for_editing_and_cannot_be_doubled(ws_dir: Path, clock: FakeClock):
     ws = open_ws(ws_dir, clock)
-    attempt = ws.begin_manual_task(ws.start_run(CANDIDATE, on=DAY), "T1.1")
+    attempt = ws.begin_attempt(ws.start_run(CANDIDATE, on=DAY), "T1.1")
 
     with pytest.raises(AttemptError, match="raw Output"):
         attempt.pause()
@@ -141,7 +141,7 @@ def test_all_time_in_the_external_editor_counts_and_its_text_is_the_final(
     editor = FakeEditor(clock, returns="one two three four", open_seconds=600)
     ws = open_ws(ws_dir, clock, editor)
     run = ws.start_run(CANDIDATE, on=DAY)
-    attempt = ws.begin_manual_task(run, "T1.1")
+    attempt = ws.begin_attempt(run, "T1.1")
     clock.advance(30)
     attempt.submit_raw("one two six seven")
 
@@ -161,7 +161,7 @@ def test_all_time_in_the_external_editor_counts_and_its_text_is_the_final(
 def test_a_second_external_edit_reopens_the_last_edited_text(ws_dir: Path, clock: FakeClock):
     editor = FakeEditor(clock, returns="edited", open_seconds=5)
     ws = open_ws(ws_dir, clock, editor)
-    attempt = ws.begin_manual_task(ws.start_run(CANDIDATE, on=DAY), "T1.1")
+    attempt = ws.begin_attempt(ws.start_run(CANDIDATE, on=DAY), "T1.1")
     attempt.submit_raw("raw")
     attempt.edit_externally()
     attempt.edit_externally()
@@ -172,7 +172,7 @@ def test_a_second_external_edit_reopens_the_last_edited_text(ws_dir: Path, clock
 def test_the_external_editor_cannot_be_opened_while_paused(ws_dir: Path, clock: FakeClock):
     editor = FakeEditor(clock, returns="edited", open_seconds=5)
     ws = open_ws(ws_dir, clock, editor)
-    attempt = ws.begin_manual_task(ws.start_run(CANDIDATE, on=DAY), "T1.1")
+    attempt = ws.begin_attempt(ws.start_run(CANDIDATE, on=DAY), "T1.1")
     attempt.submit_raw("raw")
     attempt.pause()
 
@@ -183,7 +183,7 @@ def test_the_external_editor_cannot_be_opened_while_paused(ws_dir: Path, clock: 
 
 def test_finishing_with_no_edit_keeps_the_raw_output_as_final(ws_dir: Path, clock: FakeClock):
     ws = open_ws(ws_dir, clock)
-    attempt = ws.begin_manual_task(ws.start_run(CANDIDATE, on=DAY), "T1.1")
+    attempt = ws.begin_attempt(ws.start_run(CANDIDATE, on=DAY), "T1.1")
     attempt.submit_raw("good as is")
 
     assert attempt.finish().edit_distance == 0
@@ -192,7 +192,7 @@ def test_finishing_with_no_edit_keeps_the_raw_output_as_final(ws_dir: Path, cloc
 def test_abandoning_records_nothing_and_the_task_can_be_redone(ws_dir: Path, clock: FakeClock):
     ws = open_ws(ws_dir, clock)
     run = ws.start_run(CANDIDATE, on=DAY)
-    first = ws.begin_manual_task(run, "T1.1")
+    first = ws.begin_attempt(run, "T1.1")
     clock.advance(500)
     first.submit_raw("abandoned draft")
     first.abandon()
@@ -204,7 +204,7 @@ def test_abandoning_records_nothing_and_the_task_can_be_redone(ws_dir: Path, clo
         first.finish("late")
 
     clock.advance(1000)
-    second = ws.begin_manual_task(run, "T1.1")
+    second = ws.begin_attempt(run, "T1.1")
     clock.advance(20)
     second.submit_raw("redo")
     record = second.finish("redo")
@@ -217,14 +217,14 @@ def test_abandoning_records_nothing_and_the_task_can_be_redone(ws_dir: Path, clo
 def test_a_finished_task_cannot_be_begun_or_finished_again(ws_dir: Path, clock: FakeClock):
     ws = open_ws(ws_dir, clock)
     run = ws.start_run(CANDIDATE, on=DAY)
-    attempt = ws.begin_manual_task(run, "T1.1")
+    attempt = ws.begin_attempt(run, "T1.1")
     attempt.submit_raw("raw")
     attempt.finish("final")
 
     with pytest.raises(AttemptError, match="finished"):
         attempt.finish("again")
     with pytest.raises(AttemptError, match="already recorded"):
-        ws.begin_manual_task(ws.resume_run(run.id), "T1.1")
+        ws.begin_attempt(ws.resume_run(run.id), "T1.1")
 
 
 def test_a_private_task_is_refused_before_any_content_is_shown(
@@ -239,7 +239,7 @@ def test_a_private_task_is_refused_before_any_content_is_shown(
 
     try:
         with pytest.raises(ClearanceError, match="T3.1"):
-            ws.begin_manual_task(run, "T3.1")
+            ws.begin_attempt(run, "T3.1")
     finally:
         (private / "tasks" / "T3.1" / "input.md").chmod(0o644)
 
@@ -248,7 +248,7 @@ def test_a_candidates_flat_per_task_cost_is_the_tasks_cost(ws_dir: Path, clock: 
     ws = open_ws(ws_dir, clock)
     ws.update_candidate(CANDIDATE, cost_per_task_usd=0.75)
     run = ws.start_run(CANDIDATE, on=DAY)
-    attempt = ws.begin_manual_task(run, "T1.1")
+    attempt = ws.begin_attempt(run, "T1.1")
     attempt.submit_raw("raw")
 
     assert attempt.finish().cost_usd == 0.75
@@ -259,7 +259,7 @@ def test_a_candidate_without_a_flat_cost_records_null_cost(ws_dir: Path, clock: 
     ws = open_ws(ws_dir, clock)
     assert ws.candidate(CANDIDATE).cost_per_task_usd is None
     run = ws.start_run(CANDIDATE, on=DAY)
-    attempt = ws.begin_manual_task(run, "T1.1")
+    attempt = ws.begin_attempt(run, "T1.1")
     attempt.submit_raw("raw")
 
     assert attempt.finish().cost_usd is None
@@ -310,7 +310,7 @@ def test_a_narrowed_gate_stops_private_input_to_an_open_run(
     with pytest.raises(ClearanceError, match="T3.1"):
         ws.task_input(run, "T3.1")
     with pytest.raises(ClearanceError, match="T3.1"):
-        ws.begin_manual_task(run, "T3.1")
+        ws.begin_attempt(run, "T3.1")
     with pytest.raises(ClearanceError):
         ws.resume_run(run.id)
     assert ws.task_input(run, "T1.1")
@@ -324,13 +324,13 @@ def test_a_failed_gate_stops_an_open_run_beginning_a_task(ws_dir: Path, clock: F
                    passed=False, clearance=None)
 
     with pytest.raises(GateNotPassed):
-        ws.begin_manual_task(run, "T1.1")
+        ws.begin_attempt(run, "T1.1")
 
 
 def test_an_attempt_open_when_the_gate_fails_cannot_save(ws_dir: Path, clock: FakeClock):
     ws = open_ws(ws_dir, clock)
     run = ws.start_run(CANDIDATE, on=DAY)
-    attempt = ws.begin_manual_task(run, "T1.1")
+    attempt = ws.begin_attempt(run, "T1.1")
     attempt.submit_raw("a draft")
 
     ws.record_gate(CANDIDATE, reviewer="A. Nother", on=DAY, checklist=CHECKLIST,
@@ -341,7 +341,7 @@ def test_an_attempt_open_when_the_gate_fails_cannot_save(ws_dir: Path, clock: Fa
     assert "T1.1" in run.pending  # nothing was recorded
 
 
-def test_a_run_of_an_automated_candidate_cannot_be_worked_by_hand(
+def test_an_automated_candidates_task_cannot_be_begun_before_it_is_sent(
     workspace_dir: Path, clock: FakeClock
 ):
     write_task(workspace_dir, "T1.1")
@@ -351,8 +351,8 @@ def test_a_run_of_an_automated_candidate_cannot_be_worked_by_hand(
     ws = open_ws(workspace_dir, clock)
     run = ws.start_run("api@1", on=DAY)
 
-    with pytest.raises(AttemptError, match="manual_assisted"):
-        ws.begin_manual_task(run, "T1.1")
+    with pytest.raises(AttemptError, match="send it first"):
+        ws.begin_attempt(run, "T1.1")
 
 
 def test_a_runs_progress_counts_the_tasks_recorded(ws_dir: Path, clock: FakeClock):
@@ -361,7 +361,7 @@ def test_a_runs_progress_counts_the_tasks_recorded(ws_dir: Path, clock: FakeCloc
     run = ws.start_run(CANDIDATE, on=DAY)
     assert run.progress == (0, 2)
 
-    attempt = ws.begin_manual_task(run, "T1.1")
+    attempt = ws.begin_attempt(run, "T1.1")
     attempt.submit_raw("raw")
     attempt.finish()
 

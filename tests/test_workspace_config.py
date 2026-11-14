@@ -280,7 +280,7 @@ def test_a_private_root_inside_the_public_workspace_is_refused(
 
 # Pinned: editing the default judge.yaml models or prompt makes a new Judge Setup
 # (ADR-0003), so this changes only on purpose.
-DEFAULT_JUDGE_SETUP_HASH = "677d7ae2fc14d06c"
+DEFAULT_JUDGE_SETUP_HASH = "7bae56d113f3e624"
 
 
 def test_the_default_judge_setup_is_one_public_only_openai_judge(workspace_dir: Path):
@@ -293,7 +293,7 @@ def test_the_default_judge_setup_is_one_public_only_openai_judge(workspace_dir: 
     )
     assert "claude" not in spec.family  # Claude as Baseline is never self-judged
     assert setup.prompt_file == "config/judge/prompt.md"
-    assert "Version: 1" in setup.prompt
+    assert "Version: 2" in setup.prompt
     assert setup.hash == DEFAULT_JUDGE_SETUP_HASH
 
 

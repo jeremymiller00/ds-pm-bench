@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import datetime
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -110,11 +110,13 @@ class Run:
         active_seconds: float,
         latency_seconds: float,
         cost_usd: float | None,
+        call: ProviderCall | None = None,
     ) -> OutputRecord:
         """Save a Task's raw Output and edited final with its timings and cost.
 
-        active_seconds is the PM's whole active time on the Task (prompting plus editing);
-        latency_seconds is the time to first draft.
+        active_seconds is the PM's active time on the Task; latency_seconds is the time
+        to the raw Output. call is an automated Candidate's provider call (model, tokens,
+        tries, why its cost is unknown), kept with the numbers.
         """
         task = self.task(task_id)
         if self._task_record(task.id) is not None:
@@ -125,6 +127,7 @@ class Run:
             active_seconds=active_seconds,
             latency_seconds=latency_seconds,
             cost_usd=cost_usd,
+            call=call,
         )
         content = self.content_folder(task)
         for name, text in (("raw", raw), ("final", final)):
@@ -139,6 +142,8 @@ class Run:
             "latency_seconds": latency_seconds,
             "cost_usd": cost_usd,
         }
+        if call is not None:
+            task_record.update(asdict(call))
         self._write_task_record(task.id, task_record)
         return record
 
@@ -166,6 +171,15 @@ class Run:
         """The hash of the Judge Setup that scored this Run; None until it is judged."""
         return (self._snapshot().get("judge_setup") or {}).get("hash")
 
+    def check_judge_setup(self, setup: JudgeSetup) -> None:
+        """A Run is scored by one Judge Setup: JudgeSetupMismatch for any other than the
+        one that first judged it."""
+        if self.judge_setup_hash not in (None, setup.hash):
+            raise JudgeSetupMismatch(
+                f"Run {self.id} was judged by Judge Setup {self.judge_setup_hash}, not "
+                f"{setup.hash}; a Run is scored by one Judge Setup"
+            )
+
     @property
     def unjudged(self) -> tuple[str, ...]:
         """Task ids whose Output is recorded but not yet scored, in Suite order."""
@@ -181,19 +195,15 @@ class Run:
 
     def record_judging(self, judging: TaskJudging, setup: JudgeSetup) -> None:
         """Save a Judge Setup's scoring of a Task: the median per Criterion as its
-        Criterion scores, and every Judge's scores. Reasons go beside the Outputs, so a
+        Criterion scores, and every judge model's scores. Reasons go beside the Outputs, so a
         Private Task's stay in its private root (ADR-0006).
 
         A Run is scored by one Judge Setup: the first records its hash in run.yaml and
         any other is refused (JudgeSetupMismatch).
         """
+        self.check_judge_setup(setup)
         snapshot = self._snapshot()
         recorded = snapshot.get("judge_setup")
-        if recorded is not None and recorded["hash"] != setup.hash:
-            raise JudgeSetupMismatch(
-                f"Run {self.id} was judged by Judge Setup {recorded['hash']}, not "
-                f"{setup.hash}; a Run is scored by one Judge Setup"
-            )
         task = self.task(judging.task_id)
         self.record_criterion_scores(task.id, judging.scores)
         if recorded is None:
@@ -221,7 +231,7 @@ class Run:
 
     @property
     def full_human_checks(self) -> tuple[str, ...]:
-        """Task ids the Judge marked for a full human check: a same-family Judge or a
+        """Task ids the Judge marked for a full human check: a same-family judge model or a
         panel disagreement."""
         return tuple(
             t.id for t in self.tasks
@@ -229,7 +239,7 @@ class Run:
         )
 
     def judge_reasons(self, task_id: str) -> dict[str, Any]:
-        """Each Judge's score and reason per Criterion: label -> Criterion -> both."""
+        """Each judge model's score and reason per Criterion: label -> Criterion -> both."""
         task = self.task(task_id)
         path = self.content_folder(task) / JUDGE_FOLDER / f"{task.id}.yaml"
         return yaml.safe_load(path.read_text()) if path.is_file() else {}
@@ -397,6 +407,17 @@ class SpotCheck:
 
 
 @dataclass(frozen=True)
+class ProviderCall:
+    """What a Task Result keeps of an automated Candidate's provider call."""
+
+    model: str
+    input_tokens: int
+    output_tokens: int
+    tries: int  # 1, or 2 after the one retry
+    cost_note: str | None  # why the cost is unknown; None when it is known
+
+
+@dataclass(frozen=True)
 class OutputRecord:
     """The numbers recorded for one Task's Output. Never holds content."""
 
@@ -405,6 +426,7 @@ class OutputRecord:
     active_seconds: float
     latency_seconds: float
     cost_usd: float | None
+    call: ProviderCall | None = None  # an automated Candidate's call; None when manual
 
 
 def edit_distance(raw: str, final: str) -> float:

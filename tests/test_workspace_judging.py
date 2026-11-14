@@ -13,6 +13,8 @@ from bench import (
     JudgeReplyError,
     JudgeSetupMismatch,
     JudgeUnavailable,
+    JudgingError,
+    RunNotFinished,
     Workspace,
 )
 from test_workspace_candidates import candidate, write_candidate
@@ -126,7 +128,7 @@ def test_the_judge_sees_input_rubric_gold_and_final_but_never_the_candidate(ws_d
 
 
 PANEL = [{"provider": "openai", "model": "gpt-6"}, {"provider": "google", "model": "gemini-4"},
-         {"provider": "mistral", "model": "large-3"}]
+         {"provider": "openai", "model": "gpt-6-mini"}]
 
 
 def test_a_panel_scores_the_median_and_flags_criteria_more_than_a_point_apart(ws_dir: Path):
@@ -134,7 +136,7 @@ def test_a_panel_scores_the_median_and_flags_criteria_more_than_a_point_apart(ws
     judges = FakeJudges(**{
         "openai/gpt-6": FakeJudge(scores={"clarity": 5, "correctness": 2}),
         "google/gemini-4": FakeJudge(scores={"clarity": 2, "correctness": 3}),
-        "mistral/large-3": FakeJudge(scores={"clarity": 3, "correctness": 3}),
+        "openai/gpt-6-mini": FakeJudge(scores={"clarity": 3, "correctness": 3}),
     })
     ws = Workspace.open(ws_dir, judges=judges)
     run = recorded_run(ws)
@@ -150,7 +152,7 @@ def test_a_panel_scores_the_median_and_flags_criteria_more_than_a_point_apart(ws
     assert record["judge"]["full_human_check"] is True
     assert judging.disagreements == ("clarity",)
     reasons = ws.resume_run(run.id).judge_reasons("T1.1")
-    assert reasons["mistral/large-3"]["clarity"] == {"score": 3, "reason": "Clarity ok."}
+    assert reasons["openai/gpt-6-mini"]["clarity"] == {"score": 3, "reason": "Clarity ok."}
     assert run.full_human_checks == ("T1.1",)
 
 
@@ -182,15 +184,15 @@ def test_an_uncertified_judge_is_refused_without_an_override(ws_dir: Path):
     assert ws.decision_log() == ()
 
 
-def test_every_uncertified_override_is_logged_with_the_judge_setup_hash(ws_dir: Path):
+def test_the_uncertified_override_is_logged_once_with_the_judge_setup_hash(ws_dir: Path):
     ws = Workspace.open(ws_dir, judges=FakeJudges())
     run = recorded_run(ws)
 
     ws.judge_run(run, allow_uncertified=True)
-    ws.judge_run(run, allow_uncertified=True)
+    ws.judge_run(run, allow_uncertified=True)  # nothing left to judge
 
     entries = ws.decision_log()
-    assert len(entries) == 2
+    assert len(entries) == 1
     assert entries[0] == {
         "kind": "uncertified_judge_override",
         "date": DAY.isoformat(),
@@ -200,15 +202,20 @@ def test_every_uncertified_override_is_logged_with_the_judge_setup_hash(ws_dir: 
     }
 
 
-@pytest.mark.parametrize("model", ["web-1", "Web 1", "WEB-1"])
-def test_a_judge_that_is_the_candidate_under_test_is_refused(ws_dir: Path, model):
+@pytest.mark.parametrize("model", ["claude-sonnet-5", "Claude Sonnet 5", "CLAUDE-SONNET-5"])
+def test_a_judge_model_that_is_the_model_the_candidate_calls_is_refused(ws_dir: Path, model):
+    data = candidate(tool="chatbot", version="web-1", adapter="manual_assisted",
+                     env_vars=[], baseline=True,
+                     settings={"provider": "anthropic", "model": "claude-sonnet-5"})
+    data["gate"]["clearance"] = "public_only"
+    write_candidate(ws_dir, CANDIDATE, data)
     write_judge_setup(ws_dir, mode="panel", models=[
-        PANEL[0], {"provider": "chatco", "model": model, "family": ["chatbot"]},
+        PANEL[0], {"provider": "anthropic", "model": model},
     ])
     ws = Workspace.open(ws_dir, judges=FakeJudges())
     run = recorded_run(ws)
 
-    with pytest.raises(JudgeRefused, match="chatco"):
+    with pytest.raises(JudgeRefused, match="anthropic/"):
         ws.judge_run(run, allow_uncertified=True)
 
     assert run.unjudged == ("T1.1",)
@@ -225,14 +232,52 @@ def test_the_claude_baseline_cannot_be_judged_by_the_same_claude_model(workspace
     ])
     ws = Workspace.open(workspace_dir, judges=FakeJudges())
     run = ws.start_run("claude@claude-opus-5-5", on=DAY)
+    run.record_output("T1.1", raw="x", final="y", active_seconds=1, latency_seconds=1,
+                      cost_usd=None)
 
     with pytest.raises(JudgeRefused, match="anthropic/claude-opus-5-5"):
         ws.judge_run(run, allow_uncertified=True)
 
 
+def test_self_judging_compares_the_model_the_candidate_calls_not_its_version(
+    workspace_dir: Path,
+):
+    write_task(workspace_dir, "T1.1")
+    data = candidate(version="opus-latest", baseline=True,
+                     settings={"model": "claude-opus-5-5"})  # tool Claude
+    data["gate"]["clearance"] = "public_only"
+    write_candidate(workspace_dir, "claude@opus-latest", data)
+    write_judge_setup(workspace_dir, models=[
+        {"provider": "anthropic", "model": "claude-opus-5-5"},
+    ])
+    ws = Workspace.open(workspace_dir, judges=FakeJudges())
+    run = ws.start_run("claude@opus-latest", on=DAY)
+    run.record_output("T1.1", raw="x", final="y", active_seconds=1, latency_seconds=1,
+                      cost_usd=None)
+
+    with pytest.raises(JudgeRefused, match="anthropic/claude-opus-5-5"):
+        ws.judge_run(run, allow_uncertified=True)
+
+
+def test_the_same_model_id_from_another_provider_is_not_self_judging(workspace_dir: Path):
+    write_task(workspace_dir, "T1.1")
+    data = candidate(tool="OpenAI", version="shared-1", baseline=True)
+    data["gate"]["clearance"] = "public_only"
+    write_candidate(workspace_dir, "openai@shared-1", data)
+    write_judge_setup(workspace_dir, models=[{"provider": "anthropic", "model": "shared-1"}])
+    ws = Workspace.open(workspace_dir, judges=FakeJudges())
+    run = ws.start_run("openai@shared-1", on=DAY)
+    run.record_output("T1.1", raw="x", final="y", active_seconds=1, latency_seconds=1,
+                      cost_usd=None)
+
+    [judging] = ws.judge_run(run, allow_uncertified=True)
+
+    assert not judging.same_family
+
+
 def test_a_same_family_candidate_is_flagged_for_a_full_human_check(ws_dir: Path):
     write_judge_setup(ws_dir, models=[
-        {"provider": "chatco", "model": "web-2", "family": ["chatbot"]},
+        {"provider": "openai", "model": "web-2", "family": ["chatbot"]},
     ])
     ws = Workspace.open(ws_dir, judges=FakeJudges())
     run = recorded_run(ws)
@@ -333,12 +378,9 @@ def test_changing_a_judge_model_changes_the_hash_but_clearance_does_not(ws_dir: 
 
 
 def test_a_run_judged_by_one_judge_setup_refuses_another(ws_dir: Path):
-    write_task(ws_dir, "T1.2")
     ws = Workspace.open(ws_dir, judges=FakeJudges())
     run = recorded_run(ws)
     ws.judge_run(run, allow_uncertified=True)
-    run.record_output("T1.2", raw="x", final="y", active_seconds=1, latency_seconds=1,
-                      cost_usd=None)
     (ws_dir / "config" / "judge" / "prompt.md").write_text("Score strictly.")
 
     judge = FakeJudge()
@@ -347,7 +389,6 @@ def test_a_run_judged_by_one_judge_setup_refuses_another(ws_dir: Path):
     with pytest.raises(JudgeSetupMismatch, match="one Judge Setup"):
         ws.judge_run(run, allow_uncertified=True)
 
-    assert run.unjudged == ("T1.2",)
     assert judge.requests == []
     assert len(ws.decision_log()) == 1  # only the first, allowed, override
 
@@ -411,6 +452,7 @@ def test_judging_without_a_judge_setup_is_unavailable(ws_dir: Path):
         ({"models": []}, "models"),
         ({"mode": "panel"}, "models"),
         ({"models": PANEL}, "models"),
+        ({"models": [{"provider": "mistral", "model": "x"}]}, "models[0].provider"),
         ({"models": [{"provider": "openai"}]}, "models[0].model"),
         ({"models": [{"provider": "openai", "model": "x", "seed": 1}]}, "models[0].seed"),
         ({"mode": "panel", "models": [PANEL[0], PANEL[0]]}, "models[1]"),
@@ -460,3 +502,84 @@ def test_runs_judged_by_different_judge_setups_warn_and_carry_no_single_hash(ws_
 
     assert comparison.judge_setup_hash is None
     assert any("different Judge Setups" in w for w in comparison.verdict.warnings)
+
+
+def test_a_run_with_pending_tasks_cannot_be_judged(ws_dir: Path):
+    write_task(ws_dir, "T1.2")
+    judge = FakeJudge()
+    ws = Workspace.open(ws_dir, judges=FakeJudges(**{"openai/gpt-6": judge}))
+    run = recorded_run(ws)  # T1.1 recorded, T1.2 still pending
+
+    with pytest.raises(RunNotFinished, match="T1.2"):
+        ws.judge_run(run, allow_uncertified=True)
+
+    assert judge.requests == []
+    assert run.unjudged == ("T1.1",)
+    assert ws.decision_log() == ()
+
+
+def test_a_judging_that_judges_no_task_logs_no_override(ws_dir: Path):
+    broken = FakeJudges(**{"openai/gpt-6": FakeJudge(reply="not json")})
+    ws = Workspace.open(ws_dir, judges=broken)
+    run = recorded_run(ws)
+    with pytest.raises(JudgeReplyError):
+        ws.judge_run(run, allow_uncertified=True)
+
+    assert ws.decision_log() == ()
+
+    ws = Workspace.open(ws_dir, judges=FakeJudges())
+    ws.judge_run(run, allow_uncertified=True)
+
+    [entry] = ws.decision_log()
+    assert entry["kind"] == "uncertified_judge_override"
+
+
+def test_a_resumed_judging_does_not_log_the_override_again(ws_dir: Path):
+    write_task(ws_dir, "T1.2")
+    ws = Workspace.open(ws_dir, judges=FakeJudges())
+    run = recorded_run(ws)
+    run.record_output("T1.2", raw="x", final="y", active_seconds=1, latency_seconds=1,
+                      cost_usd=None)
+
+    class FailsOnSecondTask(FakeJudge):
+        def judge(self, request) -> str:
+            if self.requests:
+                self.requests.append(request)
+                return "not json"
+            return super().judge(request)
+
+    ws = Workspace.open(ws_dir, judges=FakeJudges(**{"openai/gpt-6": FailsOnSecondTask()}))
+    with pytest.raises(JudgeReplyError, match="T1.2"):
+        ws.judge_run(run, allow_uncertified=True)
+    assert len(ws.decision_log()) == 1  # logged once T1.1 was judged
+
+    ws = Workspace.open(ws_dir, judges=FakeJudges())
+    ws.judge_run(run, allow_uncertified=True)
+
+    assert len(ws.decision_log()) == 1
+    assert run.unjudged == ()
+
+
+def test_without_judge_models_judging_is_unavailable(ws_dir: Path):
+    ws = Workspace.open(ws_dir)  # no judges: the composition root was not used
+    run = recorded_run(ws)
+
+    with pytest.raises(JudgeUnavailable, match="without judge models"):
+        ws.judge_run(run, allow_uncertified=True)
+
+    assert ws.decision_log() == ()
+
+
+@pytest.mark.parametrize("error", [
+    RunNotFinished, JudgeUnavailable, JudgeNotCertified, JudgeRefused,
+    JudgeReplyError, JudgeSetupMismatch,
+])
+def test_every_judging_refusal_is_a_judging_error(error):
+    assert issubclass(error, JudgingError)
+
+
+def test_a_private_task_refused_to_the_judge_is_a_judging_and_clearance_error():
+    from bench import JudgeClearanceError
+
+    assert issubclass(JudgeClearanceError, JudgingError)
+    assert issubclass(JudgeClearanceError, ClearanceError)
