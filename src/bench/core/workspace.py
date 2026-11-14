@@ -221,8 +221,14 @@ class Workspace:
         return run.task_input(task_id)
 
     def resume_run(self, run_id: str) -> Run:
-        """Reopen a Run, such as one left half-finished; see Run.pending."""
-        return open_run(self.root, run_id, {c.id: c for c in self.candidates}, self.tasks)
+        """Reopen a Run, such as one left half-finished; see Run.pending.
+
+        A finished Run whose Tasks were bumped since loads them at the versions it used,
+        from their archives (ADR-0003); an unfinished one raises RunMismatch.
+        """
+        return open_run(
+            self.task_context, run_id, {c.id: c for c in self.candidates}, self.tasks
+        )
 
     def score(self, results: Iterable[TaskResult]) -> RunScore:
         """Score a Run's per-Task result records with this Workspace's weights and bands."""

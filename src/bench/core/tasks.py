@@ -6,6 +6,8 @@ A Task folder holds:
   input.*      the input, any one extension
   gold.md      the Gold Answer
   rubric.yaml  the task-specific Criteria, added to the shared Rubric
+  versions/<n>/  a copy of version n's files, kept once an edit bumps a version a
+               Run used (ADR-0003); never loaded as a Task of its own
 """
 
 from __future__ import annotations
@@ -28,6 +30,7 @@ from bench.core.settings import SETTINGS_FILE
 TASK_FILE = "task.md"
 GOLD_FILE = "gold.md"
 RUBRIC_FILE = "rubric.yaml"
+VERSIONS_FOLDER = "versions"
 
 TASK_FIELDS = ("id", "track", "trap", "version", "manual_time_minutes")
 
@@ -258,7 +261,10 @@ def edit_task(ctx: TaskContext, task: Task, changes: Mapping[str, Any], *, used:
         task.version + 1 if used else task.version,
         edited["manual_time_minutes"],
     )
+    archive = task.folder / VERSIONS_FOLDER / str(task.version)
     try:
+        if used:
+            _archive(task, archive)
         _write_task_files(task.folder, meta, edited["canonical_prompt"], edited["criteria"])
         task.input_path.write_text(edited["input"])
         task.gold_answer_path.write_text(edited["gold_answer"])
@@ -266,7 +272,25 @@ def edit_task(ctx: TaskContext, task: Task, changes: Mapping[str, Any], *, used:
     except BaseException:
         for path, content in backup.items():
             path.write_bytes(content)
+        if used:
+            shutil.rmtree(archive, ignore_errors=True)
         raise
+
+
+def load_version(ctx: TaskContext, task: Task, version: int) -> Task | None:
+    """The Task at an earlier version from its archive, or None if it was not archived."""
+    folder = task.folder / VERSIONS_FOLDER / str(version)
+    if not folder.is_dir():
+        return None
+    return load_task(ctx, TaskRoot(task.root, task.visibility), folder)
+
+
+def _archive(task: Task, archive: Path) -> None:
+    """Copy the version a Run used beside the Task, before an edit replaces it."""
+    archive.mkdir(parents=True)
+    for path in (task.folder / TASK_FILE, task.folder / RUBRIC_FILE, task.input_path,
+                 task.gold_answer_path):
+        shutil.copy2(path, archive / path.name)
 
 
 def _editable_state(task: Task) -> dict[str, Any]:
