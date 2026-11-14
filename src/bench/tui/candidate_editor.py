@@ -26,7 +26,7 @@ NO_CLEARANCE = "none"
 class NewCandidateScreen(ModalScreen[Candidate | None]):
     """Add a Candidate, ungated; dismisses with it, or None when cancelled."""
 
-    DEFAULT_CSS = EDITOR_CSS.replace("#editor", "#new-candidate")
+    DEFAULT_CSS = EDITOR_CSS
     BINDINGS = [
         Binding("ctrl+s", "save", "Create", priority=True),
         Binding("escape", "cancel", "Cancel"),
@@ -38,7 +38,7 @@ class NewCandidateScreen(ModalScreen[Candidate | None]):
 
     def compose(self) -> ComposeResult:
         first = self.workspace.baseline is None
-        with VerticalScroll(id="new-candidate"):
+        with VerticalScroll(id="new-candidate", classes="editor-form"):
             yield Static("New Candidate. ctrl+s creates it, escape cancels.", markup=False)
             yield Label("Tool")
             yield Input(id="cand-tool")
@@ -55,7 +55,7 @@ class NewCandidateScreen(ModalScreen[Candidate | None]):
             yield Input(id="cand-cost")
             yield Checkbox("Baseline" + (" (the first Candidate must be)" if first else ""),
                            value=first, id="cand-baseline")
-            yield Static("", id="cand-error", markup=False)
+            yield Static("", id="cand-error", classes="form-error", markup=False)
             yield Button("Create", id="cand-save", variant="primary")
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
@@ -92,7 +92,7 @@ class GateRecorded(NamedTuple):
 class GateScreen(ModalScreen[GateRecorded | None]):
     """Fill one Candidate's Gate checklist; dismisses with what was recorded, or None."""
 
-    DEFAULT_CSS = EDITOR_CSS.replace("#editor", "#gate")
+    DEFAULT_CSS = EDITOR_CSS
     BINDINGS = [
         Binding("ctrl+s", "save", "Record", priority=True),
         Binding("escape", "cancel", "Cancel"),
@@ -104,7 +104,7 @@ class GateScreen(ModalScreen[GateRecorded | None]):
         self.candidate_id = candidate_id
 
     def compose(self) -> ComposeResult:
-        with VerticalScroll(id="gate"):
+        with VerticalScroll(id="gate", classes="editor-form"):
             yield Static(
                 f"Gate review of {self.candidate_id}. A review that fails the Gate logs "
                 "a reject Verdict. ctrl+s records it, escape cancels.",
@@ -128,7 +128,7 @@ class GateScreen(ModalScreen[GateRecorded | None]):
                 [(str(c), str(c)) for c in Clearance] + [("none", NO_CLEARANCE)],
                 value=NO_CLEARANCE, allow_blank=False, id="gate-clearance",
             )
-            yield Static("", id="gate-error", markup=False)
+            yield Static("", id="gate-error", classes="form-error", markup=False)
             yield Button("Record", id="gate-save", variant="primary")
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
