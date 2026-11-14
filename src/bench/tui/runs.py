@@ -57,7 +57,7 @@ class RunsPane(Vertical):
         self.run: Run | None = None
 
     def compose(self) -> ComposeResult:
-        candidates = [(c.id, c.id) for c in self.workspace.candidates]
+        candidates = [(c.id, c.id) for c in self.workspace.current_candidates]
         with Horizontal(id="run-controls"):
             yield Select(candidates, prompt="Candidate", id="run-candidate")
             yield Select(

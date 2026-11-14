@@ -431,13 +431,24 @@ def _snapshot(run: Run) -> dict[str, Any]:
 
 def _candidate_snapshot(c: Candidate) -> dict[str, Any]:
     """What a Run freezes of its Candidate (ADR-0003): any change here is a new Candidate."""
-    return {
+    snapshot = {
         "id": c.id,
         "tool": c.tool,
         "version": c.version,
         "adapter": c.adapter,
         "settings": c.settings,
     }
+    if c.cost_per_task_usd is not None:  # absent from Runs made before it existed
+        snapshot["cost_per_task_usd"] = c.cost_per_task_usd
+    return snapshot
+
+
+def candidate_ids_used(workspace_root: Path) -> set[str]:
+    """Every Candidate id some Run's snapshot holds; frozen per ADR-0003."""
+    return {
+        (yaml.safe_load(path.read_text()) or {}).get("candidate", {}).get("id")
+        for path in (workspace_root / RUNS_FOLDER).glob(f"*/{RUN_FILE}")
+    } - {None}
 
 
 def list_run_ids(workspace_root: Path) -> tuple[str, ...]:

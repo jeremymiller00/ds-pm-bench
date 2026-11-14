@@ -9,6 +9,7 @@ from textual.app import App, ComposeResult
 from textual.widgets import Footer, Header, Static, TabbedContent, TabPane
 
 from bench.core.workspace import Workspace
+from bench.tui.candidates import CandidateBrowser
 from bench.tui.runs import RunsPane
 from bench.tui.tasks import TaskBrowser
 
@@ -33,6 +34,8 @@ class BenchApp(App[None]):
         with TabbedContent(initial="tasks"):
             with TabPane("Tasks", id="tasks"):
                 yield TaskBrowser(self.workspace)
+            with TabPane("Candidates", id="candidates"):
+                yield CandidateBrowser(self.workspace)
             with TabPane("Runs", id="runs"):
                 yield RunsPane(self.workspace)
             for pane_id, label in PLACEHOLDER_SECTIONS:

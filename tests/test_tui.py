@@ -121,7 +121,7 @@ async def test_shell_opens_on_tasks_with_the_later_sections_as_placeholders(
         tabs = app.query_one(Tabs)
         labels = [str(tab.label) for tab in tabs.query("Tab")]
         assert labels == [
-            "Tasks", "Runs", "Calibration", "Comparisons", "Decision Log", "Settings"
+            "Tasks", "Candidates", "Runs", "Calibration", "Comparisons", "Decision Log", "Settings"
         ]
         sections = app.query_one(TabbedContent)
         assert sections.active == "tasks"
