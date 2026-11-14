@@ -1,8 +1,9 @@
 """Runs: one Candidate against a Suite of Tasks on one date (ADR-0003, ADR-0006).
 
 runs/<date>-<candidate>/ in the public repo holds:
-  run.yaml              the snapshot: Candidate, Task versions, date, Suite, and the
-                        Tasks left out of the Suite as placeholders (excluded)
+  run.yaml              the snapshot: Candidate, Task versions, date, Suite, the
+                        Tasks left out of the Suite as placeholders (excluded), and
+                        started: the Run's place in the order Runs were started
   results/<task>.yaml   numbers only per Task (timings, cost, Edit Distance, Criterion
                         scores, Spot-check human scores), with the Task's visibility
   raw/<task>.md         raw Output       } Public Tasks only; for a Private Task these
@@ -71,6 +72,9 @@ class Run:
     # Task id -> what is a placeholder ("input", "Gold Answer", "Manual Time",
     # "Canonical Prompt").
     excluded: Mapping[str, tuple[str, ...]] = field(default_factory=dict)
+    # Its place in the order Runs were started (1 for the first); 0 for a Run made
+    # before the order was recorded, which counts as started before every other.
+    started: int = 0
 
     @property
     def candidate_id(self) -> str:
@@ -480,6 +484,11 @@ def _load_yaml(f: FieldReader, path: Path) -> Any:
         raise f.fail("(file)", f"is not valid YAML: {exc}") from exc
 
 
+def _queued_tracks(snapshot: Mapping[str, Any]) -> frozenset[str] | None:
+    queue = snapshot.get(SPOT_CHECK_QUEUE)
+    return None if queue is None else frozenset(queue.values())
+
+
 def run_id_for(candidate: Candidate, date: datetime.date) -> str:
     return f"{date.isoformat()}-{candidate.id}"
 
@@ -558,6 +567,7 @@ def create_run(
     run_id = run_id_for(candidate, date)
     if (workspace_root / RUNS_FOLDER / run_id).exists():
         raise RunExists(f"Run {run_id} already exists; resume it instead")
+    started = 1 + max((s.get("started", 0) for s in _snapshots(workspace_root)), default=0)
     run = Run(
         id=run_id,
         candidate=candidate,
@@ -566,6 +576,7 @@ def create_run(
         tasks=runnable,
         folder=workspace_root / RUNS_FOLDER / run_id,
         excluded={t.id: t.placeholders for t in tasks if t.placeholders},
+        started=started,
     )
     run.folder.mkdir(parents=True)
     (run.folder / RUN_FILE).write_text(yaml.safe_dump(_snapshot(run), sort_keys=False))
@@ -580,6 +591,7 @@ def _snapshot(run: Run) -> dict[str, Any]:
         "candidate": _candidate_snapshot(run.candidate),
         "tasks": run.task_versions,
         "excluded": {task_id: list(missing) for task_id, missing in run.excluded.items()},
+        "started": run.started,
     }
 
 
@@ -611,21 +623,30 @@ def list_run_ids(workspace_root: Path) -> tuple[str, ...]:
     return tuple(sorted((p.parent.name for p in paths), reverse=True))
 
 
+def _snapshots(workspace_root: Path) -> list[dict[str, Any]]:
+    return [
+        yaml.safe_load(path.read_text()) or {}
+        for path in (workspace_root / RUNS_FOLDER).glob(f"*/{RUN_FILE}")
+    ]
+
+
 def tracks_spot_checked_before(workspace_root: Path, run: Run) -> frozenset[str]:
-    """The Tracks queued for a Spot-check in the same Candidate's previous Run (the
-    latest earlier one with a queue); empty when there is none."""
-    for run_id in list_run_ids(workspace_root):  # newest first
-        snapshot = yaml.safe_load(
-            (workspace_root / RUNS_FOLDER / run_id / RUN_FILE).read_text()
-        ) or {}
-        if (snapshot.get("candidate") or {}).get("id") != run.candidate_id:
-            continue
-        if datetime.date.fromisoformat(snapshot["date"]) >= run.date:
-            continue
-        queue = snapshot.get(SPOT_CHECK_QUEUE)
-        if queue is not None:
-            return frozenset(queue.values())
-    return frozenset()
+    """The Tracks queued for a Spot-check in the same Candidate's previous Run: the
+    latest one with a queue started before this one, whatever their dates (Run.started;
+    Runs from before the order was recorded fall back to their dates). Empty when there
+    is none."""
+    def order(snapshot: Mapping[str, Any]) -> tuple[int, str, str]:
+        return snapshot.get("started", 0), snapshot.get("date", ""), snapshot.get("id", "")
+
+    this = (run.started, run.date.isoformat(), run.id)
+    earlier = [
+        s for s in _snapshots(workspace_root)
+        if (s.get("candidate") or {}).get("id") == run.candidate_id
+        and order(s) < this
+        and _queued_tracks(s) is not None
+    ]
+    latest = max(earlier, key=order, default=None)
+    return frozenset() if latest is None else _queued_tracks(latest)
 
 
 def task_versions_used(workspace_root: Path) -> set[tuple[str, int]]:
@@ -683,6 +704,7 @@ def open_run(
             task_id: tuple(missing)
             for task_id, missing in snapshot.get("excluded", {}).items()
         },
+        started=snapshot.get("started", 0),
     )
     if bumped and not run.complete:
         raise RunMismatch(

@@ -910,7 +910,8 @@ class Workspace:
 
         Spot-checks recorded on either Run (Run.record_spot_check) are weighed too, and
         a Run with queued Spot-checks left (Run.spot_checks_left) is refused
-        (SpotChecksUnfinished).
+        (SpotChecksUnfinished). A Run scored from results files (human Criterion scores,
+        never judged) has no queue and needs none.
         The Baseline must hold a passing Gate: its latest review applies (GateNotPassed).
         """
         baseline = self.baseline

@@ -149,12 +149,16 @@ more than 1 point from the Judge.
 Once a Run is fully judged by a Judge Setup it gets a Spot-check queue
 (`Run.spot_check_queue`, saved in `run.yaml`): `spot_check_rate` of its Tasks (3 of 12),
 sampled reproducibly from the Run id, taking first the Tracks the same Candidate's
-previous Run did not queue, so every Track is checked across two Runs. Tasks marked for a
+previous Run did not queue, so every Track is checked across two Runs. "Previous" is
+the order Runs were started (`started` in `run.yaml`), not their dates, so a Run dated
+the same day or earlier still counts. Tasks marked for a
 full human check (a same-family judge model, a panel disagreement) are always queued, so
 a same-family Candidate gets every Task. `Run.spot_checks_left` lists each queued Task's
 Criteria with no human score yet, without the Judge's scores, so the check stays blind.
 A Comparison refuses (`SpotChecksUnfinished`) while either Run has any left: a Verdict is
-never computed on unchecked judging. Runs scored from results files have no queue.
+never computed on unchecked judging. Runs scored from results files (Criterion scores a
+human wrote in `criterion_scores`) are never judged, so they get no queue and need none:
+their scores are already human scores, and `bench spot-check` can still record extra checks.
 
 ### 4. Reach a Verdict
 

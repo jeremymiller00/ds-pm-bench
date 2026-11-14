@@ -89,6 +89,16 @@ def test_every_track_is_checked_across_two_runs_of_the_same_candidate(ws_dir: Pa
         assert tracks == set(TRACKS), (before.id, after.id)
 
 
+def test_coverage_follows_the_order_runs_were_started_not_their_dates(ws_dir: Path):
+    ws = Workspace.open(ws_dir, judges=FakeJudges())
+    ws.update_settings(spot_check_rate=1 / 12)  # one Task per Run
+    # Started newest date first: each Run's previous Run is the one started before it.
+    runs = [judged_run(ws, on=DAY + datetime.timedelta(days=d)) for d in range(7, -1, -1)]
+
+    for before, after in itertools.pairwise(runs):
+        assert TASKS[after.spot_check_queue[0]] != TASKS[before.spot_check_queue[0]]
+
+
 def test_another_candidates_run_does_not_count_toward_track_coverage(ws_dir: Path):
     ws = Workspace.open(ws_dir, judges=FakeJudges())
     first = judged_run(ws, CHALLENGER, DAY)
