@@ -21,6 +21,7 @@ from bench.core.adapters import (
 )
 from bench.core.attempts import Attempt
 from bench.core.automated import ReturnedOutput, load_returned, run_task
+from bench.core.calibration import BlindCalibrationItem, CalibrationItem, CalibrationSet
 from bench.core.candidates import (
     CANDIDATES_FOLDER,
     Candidate,
@@ -687,6 +688,30 @@ class Workspace:
                 log_override(self.root, self.clock.today(), run.id, candidate.id, setup.hash)
             judged.append(judging)
         return tuple(judged)
+
+    @property
+    def calibration_set(self) -> CalibrationSet:
+        return CalibrationSet(self.root, self.settings.private_roots)
+
+    def add_calibration_item(
+        self, run_id: str, task_id: str, *, on: datetime.date | None = None
+    ) -> CalibrationItem:
+        """Add a finished Run's final Output of a Task to the Calibration Set, Spot-checked
+        or not (stories 40, 48). A Private Task's content goes to its private root and
+        the public record keeps numbers only (ADR-0006). An unfinished Run, or an Output
+        already in the set, raises CalibrationError."""
+        run = self.resume_run(run_id)
+        return self.calibration_set.add(run, task_id, on or self.clock.today())
+
+    def calibration_items(self) -> tuple[CalibrationItem, ...]:
+        """Every Calibration Set item's numbers, oldest first."""
+        return self.calibration_set.items()
+
+    def unscored_calibration_items(self) -> tuple[BlindCalibrationItem, ...]:
+        """The items still awaiting a human score, as the human sees them: content only,
+        never the Judge's scores, the Run or the Candidate."""
+        cal = self.calibration_set
+        return tuple(cal.blind(i.id) for i in cal.items() if not i.human_scored)
 
     def _judge_model(self, spec: JudgeModelSpec) -> JudgeModel:
         if self.judges is None:

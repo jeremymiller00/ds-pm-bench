@@ -118,6 +118,11 @@ class JudgeSetupMismatch(JudgingError):
     """A Run already judged by one Judge Setup cannot be judged by another."""
 
 
+class CalibrationError(ValueError):
+    """A Calibration Set change was refused: an unfinished Run, an Output already in the
+    set, an unknown item, or human scores that do not match its Criteria."""
+
+
 class CandidateToolError(Exception):
     """An automated Candidate's tool errored: an API error, a timeout or no Output."""
 

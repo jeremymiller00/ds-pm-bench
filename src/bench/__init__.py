@@ -13,8 +13,10 @@ from bench.core.adapters import (
 )
 from bench.core.attempts import Attempt
 from bench.core.automated import ReturnedOutput
+from bench.core.calibration import BlindCalibrationItem, CalibrationItem
 from bench.core.errors import (
     AttemptError,
+    CalibrationError,
     CandidateAuthoringError,
     CandidateToolError,
     CandidateUnavailable,
@@ -58,6 +60,9 @@ __all__ = [
     "AdapterFactory",
     "Attempt",
     "AttemptError",
+    "BlindCalibrationItem",
+    "CalibrationError",
+    "CalibrationItem",
     "CandidateAdapter",
     "CandidateAuthoringError",
     "CandidateReply",
