@@ -41,6 +41,7 @@ from bench.core.manual_time import ManualTimeStopwatch
 from bench.core.runs import OutputRecord, Run
 from bench.core.tasks import Task
 from bench.core.workspace import Workspace
+from bench.tui.spot_checks import SpotCheckScreen
 
 # What the Workspace refuses when starting or resuming a Run, shown inline.
 RUN_ERRORS = (
@@ -94,6 +95,7 @@ class RunsPane(Vertical):
         with Horizontal(id="run-actions"):
             yield Button("Send Tasks", id="run-send", disabled=True)
             yield Button("Judge Run", id="run-judge", disabled=True)
+            yield Button("Spot-checks", id="run-spot-check", disabled=True)
         yield Label("Pending Tasks (enter to work or edit one)")
         yield OptionList(id="run-tasks")
         yield Label("Tasks with Manual Time still a placeholder (enter to time one by hand)")
@@ -188,6 +190,8 @@ class RunsPane(Vertical):
         self.query_one("#run-progress", Static).update(run_progress(run))
         # Judging needs a finished Run: every Task's Output recorded.
         self.query_one("#run-judge", Button).disabled = bool(run.pending)
+        # Judging queues the Spot-checks.
+        self.query_one("#run-spot-check", Button).disabled = not run.spot_check_queue
         tasks = self.query_one("#run-tasks", OptionList)
         tasks.clear_options()
         if run.candidate.manual_assisted:
@@ -209,6 +213,21 @@ class RunsPane(Vertical):
                 self._status(f"Judged {len(judged)} Task(s) of Run {run.id}.")
 
         self.app.push_screen(JudgeScreen(self.workspace, run), closed)
+
+    @on(Button.Pressed, "#run-spot-check")
+    def _spot_check(self) -> None:
+        run = self.run
+        if run is None:
+            return
+
+        def closed(_: None) -> None:
+            left = run.spot_checks_left
+            self._status(
+                f"Spot-checks of Run {run.id}: {len(left)} queued Task(s) left."
+                if left else f"Every queued Spot-check of Run {run.id} is done."
+            )
+
+        self.app.push_screen(SpotCheckScreen(self.workspace, run), closed)
 
     def _automated_label(self, run: Run, task_id: str) -> str:
         if self.workspace.returned_output(run, task_id) is not None:
