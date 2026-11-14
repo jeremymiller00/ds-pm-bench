@@ -1,4 +1,4 @@
-"""The app shell: one tab per section of the benchmark, each a client of the Workspace.
+"""The app shell: one tab per section of the TUI, each a client of the Workspace.
 
 Later slices replace a placeholder section by yielding their own widget in its TabPane.
 """

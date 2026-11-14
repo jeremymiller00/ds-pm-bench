@@ -73,11 +73,15 @@ The Suite defaults to every Task the Candidate's Clearance allows. `--suite
 public_only` narrows a private Clearance; a Suite never exceeds the Clearance. A
 Candidate cleared for private Tasks when none are loaded (no `private_roots`) is
 refused unless you pass `--suite public_only`. Tasks still holding a placeholder
-(input, Gold Answer or Manual Time) are left out of the Suite and listed under
-`excluded` in the Run's `run.yaml`.
+(input, Gold Answer, Manual Time or Canonical Prompt) are left out of the Suite and
+listed under `excluded` in the Run's `run.yaml`.
 
-A Run resumes only while its Candidate (tool, version, adapter, settings) and Task
-versions are unchanged (ADR 0003).
+A Run resumes only while its Candidate (tool, version, adapter, settings) is
+unchanged (ADR 0003). Editing a Task a Run used makes a new version and first
+copies the used one into the Task's `versions/<n>/` folder (in the private root for
+a Private Task), so a finished Run still opens, scores and compares on the versions
+it used. An unfinished Run is refused once a Task it used has a new version: a Run
+must finish on the Task versions it started with.
 
 ### 2. Score a Run
 

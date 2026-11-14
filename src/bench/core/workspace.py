@@ -49,7 +49,10 @@ from bench.core.verdicts import Comparison, Verdict, compare, gate_verdict
 
 @dataclass
 class Workspace:
-    """Opened from a benchmark repo. tasks is replaced when a Task is created or edited."""
+    """Opened from the repo root holding config/, Tasks, Candidates and Runs.
+
+    tasks is replaced when a Task is created or edited.
+    """
 
     root: Path
     settings: Settings
@@ -203,7 +206,8 @@ class Workspace:
         self.tasks = load_tasks(self.task_context)
 
     def runnable_task(self, task_id: str) -> Task:
-        """The Task; TaskNotRunnable if its input, Gold Answer or Manual Time is a placeholder."""
+        """The Task; TaskNotRunnable if any of its input, Gold Answer, Manual Time or
+        Canonical Prompt is still a placeholder."""
         task = self.task(task_id)
         if task.placeholders:
             raise TaskNotRunnable(

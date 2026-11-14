@@ -61,7 +61,8 @@ class Run:
     tasks: tuple[Task, ...]  # the Suite, at the versions this Run uses
     folder: Path  # runs/<id>/ in the public repo
     # Tasks the Suite would cover but left out because they still hold a placeholder:
-    # Task id -> what is a placeholder ("input", "Gold Answer", "Manual Time").
+    # Task id -> what is a placeholder ("input", "Gold Answer", "Manual Time",
+    # "Canonical Prompt").
     excluded: Mapping[str, tuple[str, ...]] = field(default_factory=dict)
 
     @property
