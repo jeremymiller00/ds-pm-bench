@@ -200,3 +200,111 @@ def test_removing_an_unpriced_model_names_it(workspace_dir: Path):
         Workspace.open(workspace_dir).remove_price("openai/gpt-6")
 
     assert (err.value.file, err.value.field) == ("config/prices.yaml", "models.openai/gpt-6")
+
+
+def judge_files(root: Path) -> tuple[str, str]:
+    return ((root / "config" / "judge.yaml").read_text(),
+            (root / "config" / "judge" / "prompt.md").read_text())
+
+
+def test_editing_the_judge_prompt_writes_it_and_makes_a_new_judge_setup(workspace_dir: Path):
+    ws = Workspace.open(workspace_dir)
+    old = ws.judge_setup.hash
+
+    setup = ws.update_judge_setup(prompt="Score strictly; invented facts score 1.")
+
+    assert setup.hash != old
+    assert ws.judge_setup == setup
+    assert judge_files(workspace_dir)[1] == "Score strictly; invented facts score 1."
+    assert Workspace.open(workspace_dir).judge_setup.hash == setup.hash
+
+
+def test_a_panel_of_new_judge_models_makes_a_new_judge_setup(workspace_dir: Path):
+    ws = Workspace.open(workspace_dir)
+    old = ws.judge_setup.hash
+    panel = [
+        {"provider": "openai", "model": "gpt-6"},
+        {"provider": "google", "model": "gemini-4", "env_var": "GEMINI_KEY"},
+    ]
+
+    setup = ws.update_judge_setup(mode="panel", models=panel)
+
+    assert setup.hash != old
+    assert [m.label for m in setup.models] == ["openai/gpt-6", "google/gemini-4"]
+    assert setup.models[1].env_var == "GEMINI_KEY"
+    reloaded = Workspace.open(workspace_dir).judge_setup
+    assert (reloaded.mode, reloaded.hash) == ("panel", setup.hash)
+
+
+def test_clearance_is_editable_and_is_not_part_of_the_judge_setup_hash(workspace_dir: Path):
+    ws = Workspace.open(workspace_dir)
+    old = ws.judge_setup.hash
+
+    setup = ws.update_judge_setup(clearance="public_and_private")
+
+    assert setup.clearance == "public_and_private"
+    assert setup.hash == old
+    assert Workspace.open(workspace_dir).judge_setup.clearance == "public_and_private"
+
+
+def test_the_prompt_can_move_to_a_new_file(workspace_dir: Path):
+    ws = Workspace.open(workspace_dir)
+
+    setup = ws.update_judge_setup(prompt_file="config/judge/strict.md", prompt="Be strict.")
+
+    assert setup.prompt_file == "config/judge/strict.md"
+    assert (workspace_dir / "config" / "judge" / "strict.md").read_text() == "Be strict."
+    assert yaml.safe_load(judge_files(workspace_dir)[0])["prompt"] == "config/judge/strict.md"
+
+
+@pytest.mark.parametrize(
+    "changes, field",
+    [
+        ({"mode": "panel"}, "models"),
+        ({"mode": "jury"}, "mode"),
+        ({"models": [{"provider": "acme", "model": "m"}]}, "models[0].provider"),
+        ({"models": [{"provider": "openai"}]}, "models[0].model"),
+        ({"models": []}, "models"),
+        ({"clearance": "everything"}, "clearance"),
+        ({"prompt": "  "}, "prompt"),
+        ({"prompt_file": "config/judge/missing.md"}, "prompt"),
+    ],
+    ids=["panel-of-one", "unknown-mode", "unknown-provider", "no-model", "no-models",
+         "unknown-clearance", "blank-prompt", "missing-prompt-file"],
+)
+def test_an_invalid_judge_setup_edit_names_the_field_and_writes_nothing(
+    workspace_dir: Path, changes, field
+):
+    ws = Workspace.open(workspace_dir)
+    before = judge_files(workspace_dir)
+
+    with pytest.raises(ConfigError) as err:
+        ws.update_judge_setup(**changes)
+
+    assert (err.value.file, err.value.field) == ("config/judge.yaml", field)
+    assert judge_files(workspace_dir) == before
+    assert Workspace.open(workspace_dir).judge_setup == ws.judge_setup
+
+
+def test_a_judge_setup_is_created_when_there_is_none(workspace_dir: Path):
+    (workspace_dir / "config" / "judge.yaml").unlink()
+    ws = Workspace.open(workspace_dir)
+    assert ws.judge_setup is None
+
+    setup = ws.update_judge_setup(
+        mode="single", clearance="public_only", prompt_file="config/judge/prompt.md",
+        models=[{"provider": "openai", "model": "gpt-6"}],
+    )
+
+    assert Workspace.open(workspace_dir).judge_setup == setup
+
+
+def test_a_written_judge_setup_keeps_its_header_and_key_order(workspace_dir: Path):
+    path = workspace_dir / "config" / "judge.yaml"
+    order = list(yaml.safe_load(path.read_text()))
+
+    Workspace.open(workspace_dir).update_judge_setup(clearance="public_and_private")
+
+    text = path.read_text()
+    assert text.startswith("# The Judge Setup")
+    assert list(yaml.safe_load(text)) == order

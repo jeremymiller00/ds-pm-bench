@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import datetime
 import shutil
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -59,6 +59,7 @@ from bench.core.judging import (
     JudgeRequest,
     JudgeSetup,
     TaskJudging,
+    edit_judge_setup,
     is_candidate_under_test,
     load_judge_setup,
     parse_reply,
@@ -745,6 +746,33 @@ class Workspace:
         recorded costs are kept: cost is computed when a Task is sent."""
         self.prices = remove_price(self.root, model)
         return self.prices
+
+    def update_judge_setup(
+        self,
+        *,
+        mode: str | None = None,
+        models: Iterable[Mapping[str, Any]] | None = None,
+        clearance: str | None = None,
+        prompt_file: str | None = None,
+        prompt: str | None = None,
+    ) -> JudgeSetup:
+        """Change the Judge Setup in config/judge.yaml, creating it if absent.
+
+        mode is single or panel; models each {provider, model} with optional family and
+        env_var, replacing the current list; clearance public_only or
+        public_and_private; prompt_file the judge prompt's path relative to the
+        Workspace root; prompt the new text of the prompt file. Validated as on load:
+        an invalid change raises ConfigError naming the field and writes nothing.
+
+        Changing the models or the prompt text makes a new Judge Setup with a new hash,
+        which has no Certification (ADR-0003); mode, clearance and env_var are not part
+        of the hash. Runs keep the hash of the Judge Setup that judged them.
+        """
+        given = {"mode": mode, "clearance": clearance, "prompt": prompt_file,
+                 "models": None if models is None else [dict(m) for m in models]}
+        changes = {k: v for k, v in given.items() if v is not None}
+        self.judge_setup = edit_judge_setup(self.root, changes, prompt)
+        return self.judge_setup
 
     def _tracks_in_use(self) -> dict[str, list[str]]:
         """Each Track a loaded Task or a Run's Task version declares -> what declares it."""
