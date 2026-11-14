@@ -247,3 +247,16 @@ def test_an_invalid_edit_fails_naming_the_field_and_leaves_the_task_as_it_was(
 
     assert (err.value.file, err.value.field) == ("tasks/T1.1/task.md", "track")
     assert Workspace.open(workspace_dir).task("T1.1") == before
+
+
+def test_a_canonical_prompt_that_is_not_text_is_refused_naming_the_field(
+    workspace_dir: Path,
+):
+    ws = Workspace.open(workspace_dir)
+    before = new_task(ws)
+
+    with pytest.raises(ConfigError, match="must be text, got 42") as err:
+        ws.update_task("T1.1", canonical_prompt=42)
+
+    assert err.value.field == "(canonical prompt)"
+    assert Workspace.open(workspace_dir).task("T1.1") == before

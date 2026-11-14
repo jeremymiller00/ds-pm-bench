@@ -203,6 +203,7 @@ def scaffold_task(
     folder.mkdir(parents=True)
     try:
         _write_task_files(
+            ctx,
             folder,
             _task_meta(task_id, track, trap, 1, manual_time_minutes),
             canonical_prompt,
@@ -265,7 +266,9 @@ def edit_task(ctx: TaskContext, task: Task, changes: Mapping[str, Any], *, used:
     try:
         if used:
             _archive(task, archive)
-        _write_task_files(task.folder, meta, edited["canonical_prompt"], edited["criteria"])
+        _write_task_files(
+            ctx, task.folder, meta, edited["canonical_prompt"], edited["criteria"]
+        )
         task.input_path.write_text(edited["input"])
         task.gold_answer_path.write_text(edited["gold_answer"])
         return load_task(ctx, TaskRoot(task.root, task.visibility), task.folder)
@@ -319,12 +322,18 @@ def _task_meta(
 
 
 def _write_task_files(
-    folder: Path, meta: dict[str, Any], prompt: Any, criteria: Iterable[CriterionSpec]
+    ctx: TaskContext,
+    folder: Path,
+    meta: dict[str, Any],
+    prompt: Any,
+    criteria: Iterable[CriterionSpec],
 ) -> None:
     """The one write path for task.md and rubric.yaml, shared by scaffold and edit."""
+    if not isinstance(prompt, str):
+        f = FieldReader(f"{_display(ctx.workspace_root, folder)}/{TASK_FILE}")
+        raise f.fail("(canonical prompt)", f"must be text, got {prompt!r}")
     frontmatter = yaml.safe_dump(meta, sort_keys=False, allow_unicode=True)
-    body = prompt.strip() if isinstance(prompt, str) else ""
-    (folder / TASK_FILE).write_text(f"---\n{frontmatter}---\n{body}\n")
+    (folder / TASK_FILE).write_text(f"---\n{frontmatter}---\n{prompt.strip()}\n")
     data = {"criteria": [dict(c) for c in criteria]}
     (folder / RUBRIC_FILE).write_text(
         "# Task-specific Criteria, scored alongside the shared Rubric (1-5 each).\n"
