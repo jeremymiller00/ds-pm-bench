@@ -13,6 +13,7 @@ from bench.tui.calibration import CalibrationPane
 from bench.tui.candidates import CandidateBrowser
 from bench.tui.comparisons import ComparisonsPane, DecisionLogPane
 from bench.tui.runs import RunsPane
+from bench.tui.settings import SettingsPane
 from bench.tui.tasks import TaskBrowser
 
 # (pane id, tab label) for the sections still to come, in navigation order.
@@ -27,6 +28,7 @@ BUILT_SECTIONS = {
     "calibration": CalibrationPane,
     "comparisons": ComparisonsPane,
     "decision-log": DecisionLogPane,
+    "settings": SettingsPane,
 }
 
 
