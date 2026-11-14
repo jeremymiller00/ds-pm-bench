@@ -36,3 +36,18 @@ class Visibility(StrEnum):
 
     PUBLIC = "public"
     PRIVATE = "private"
+
+
+class JudgeMode(StrEnum):
+    """A Judge Setup's shape: one judge model, or a Panel of two or more."""
+
+    SINGLE = "single"
+    PANEL = "panel"
+
+
+class Provider(StrEnum):
+    """A model provider: who serves an automated Candidate or a judge model."""
+
+    ANTHROPIC = "anthropic"
+    OPENAI = "openai"
+    GOOGLE = "google"

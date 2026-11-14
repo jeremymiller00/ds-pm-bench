@@ -1,12 +1,13 @@
 """Judging: a Judge Setup scores Outputs blind against the Rubric (ADR-0002, ADR-0003).
 
 config/judge.yaml names the Judge Setup:
-  mode       single (one model) or panel (two or more)
+  mode       single (one judge model) or panel (a Panel of two or more)
   clearance  public_only or public_and_private (ADR-0006)
   prompt     the judge prompt file, relative to the Workspace root
   models     each {provider, model}, and optionally family: the Candidate tools that
-             count as this model's family for the self-preference bias flag, and
-             env_var: the variable holding its API key (default <PROVIDER>_API_KEY)
+             count as this model's family for the self-preference bias flag (default:
+             the provider's tools in bench.core.provider_registry), and env_var: the
+             variable holding its API key (default <PROVIDER>_API_KEY)
 
 Its identity is a content hash of its models and the prompt the Judge sees, so editing
 either makes a new Judge Setup. The Judge sees the input, the Rubric, the Gold Answer and
@@ -19,30 +20,24 @@ import hashlib
 import json
 import re
 import statistics
-from collections.abc import Callable, Mapping
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any
 
 from bench.core.errors import JudgeReplyError
 from bench.core.fields import FieldReader
-from bench.core.kinds import Clearance
+from bench.core.kinds import Clearance, JudgeMode, Provider
+from bench.core.provider_registry import family_of
 from bench.core.rubric import Criterion, check_criterion_score
 
 JUDGE_FILE = "config/judge.yaml"
 JUDGE_FIELDS = ("mode", "clearance", "prompt", "models")
 MODEL_FIELDS = ("provider", "model", "family", "env_var")
-MODES = ("single", "panel")
 
-# Judges on a panel more than this many points apart on a Criterion disagree (ADR-0002).
+# Judge models on a Panel more than this many points apart on a Criterion disagree
+# (ADR-0002).
 PANEL_DISAGREEMENT_POINTS = 1
-
-# The Candidate tools in each provider's family when a model names none.
-DEFAULT_FAMILIES: Mapping[str, tuple[str, ...]] = {
-    "anthropic": ("anthropic", "claude"),
-    "openai": ("openai", "chatgpt", "gpt", "codex"),
-    "google": ("google", "gemini"),
-}
 
 # Appended to the judge prompt; part of what the Judge Setup hash covers.
 REPLY_FORMAT = """\
@@ -54,7 +49,7 @@ Reply with JSON only, in this shape, with one entry for every Criterion above:
 class JudgeModelSpec:
     """One judge model of a Judge Setup."""
 
-    provider: str
+    provider: Provider
     model: str
     family: tuple[str, ...]  # Candidate tools of the same family, lower case
     env_var: str = ""  # the API key's variable (ADR-0005); not part of the identity
@@ -66,7 +61,7 @@ class JudgeModelSpec:
 
 @dataclass(frozen=True)
 class JudgeSetup:
-    mode: str  # "single" or "panel"
+    mode: JudgeMode
     models: tuple[JudgeModelSpec, ...]
     clearance: Clearance
     prompt_file: str
@@ -76,7 +71,7 @@ class JudgeSetup:
     def hash(self) -> str:
         """The identity: a content hash of the models and the prompt the Judge sees."""
         content = {
-            "models": [{"provider": m.provider, "model": m.model} for m in self.models],
+            "models": self._model_identities(),
             "prompt": self.prompt,
             "reply_format": REPLY_FORMAT,
         }
@@ -87,14 +82,18 @@ class JudgeSetup:
         """What a Run records of the Judge Setup that scored it."""
         return {
             "hash": self.hash,
-            "mode": self.mode,
-            "models": [{"provider": m.provider, "model": m.model} for m in self.models],
+            "mode": str(self.mode),
+            "models": self._model_identities(),
         }
+
+    def _model_identities(self) -> list[dict[str, str]]:
+        """The judge models as the hash and a Run's snapshot both record them."""
+        return [{"provider": str(m.provider), "model": m.model} for m in self.models]
 
 
 @dataclass(frozen=True)
 class JudgeRequest:
-    """Everything one Judge sees for one Output; never the Candidate's identity."""
+    """Everything a judge model sees for one Output; never the Candidate's identity."""
 
     prompt: str  # the judge prompt
     input: str  # the Canonical Prompt and input the Candidate was given
@@ -115,16 +114,6 @@ class JudgeRequest:
         )
 
 
-class JudgeModel(Protocol):
-    """A judge model call: returns the model's reply text to a JudgeRequest."""
-
-    def judge(self, request: JudgeRequest) -> str: ...
-
-
-# What Workspace receives by injection: the JudgeModel for each model of a Judge Setup.
-JudgeModels = Callable[[JudgeModelSpec], JudgeModel]
-
-
 @dataclass(frozen=True)
 class CriterionJudgement:
     score: int | float
@@ -133,16 +122,16 @@ class CriterionJudgement:
 
 @dataclass(frozen=True)
 class TaskJudging:
-    """One Task's judging by a Judge Setup: every Judge's scores and reasons, and the
-    median per Criterion that becomes the Task's Criterion scores."""
+    """One Task's judging by a Judge Setup: every judge model's scores and reasons, and
+    the median per Criterion that becomes the Task's Criterion scores."""
 
     task_id: str
     judges: Mapping[str, Mapping[str, CriterionJudgement]]  # label -> Criterion -> it
-    same_family: bool  # a Judge shares the Candidate's family
+    same_family: bool  # a judge model shares the Candidate's family
 
     @property
     def scores(self) -> dict[str, int | float]:
-        """The median per Criterion across the Judges."""
+        """The median per Criterion across the judge models."""
         criteria = next(iter(self.judges.values()))
         return {
             cid: statistics.median(j[cid].score for j in self.judges.values())
@@ -151,7 +140,7 @@ class TaskJudging:
 
     @property
     def disagreements(self) -> tuple[str, ...]:
-        """Criteria the Judges score more than PANEL_DISAGREEMENT_POINTS apart."""
+        """Criteria the judge models score more than PANEL_DISAGREEMENT_POINTS apart."""
         criteria = next(iter(self.judges.values()))
         flagged = []
         for cid in criteria:
@@ -162,7 +151,8 @@ class TaskJudging:
 
     @property
     def full_human_check(self) -> bool:
-        """A disagreement or a same-family Judge means a human checks every Criterion."""
+        """A disagreement or a same-family judge model means a human checks every
+        Criterion."""
         return self.same_family or bool(self.disagreements)
 
 
@@ -173,15 +163,15 @@ def load_judge_setup(root: Path) -> JudgeSetup | None:
     f = FieldReader(JUDGE_FILE)
     data = f.read(root)
     f.exact_keys(data, "(file)", JUDGE_FIELDS)
-    mode = f.choice(data["mode"], "mode", MODES)
+    mode = f.enum(data["mode"], "mode", JudgeMode)
     raw_models = data["models"]
     if not isinstance(raw_models, list) or not raw_models:
         raise f.fail("models", "must be a non-empty list of {provider, model}")
     models = tuple(_model(f, entry, f"models[{i}]") for i, entry in enumerate(raw_models))
-    if mode == "single" and len(models) != 1:
+    if mode == JudgeMode.SINGLE and len(models) != 1:
         raise f.fail("models", f"a single Judge has exactly one model, got {len(models)}")
-    if mode == "panel" and len(models) < 2:
-        raise f.fail("models", f"a panel needs at least two models, got {len(models)}")
+    if mode == JudgeMode.PANEL and len(models) < 2:
+        raise f.fail("models", f"a Panel needs at least two models, got {len(models)}")
     labels = [m.label for m in models]
     for i, label in enumerate(labels):
         if label in labels[:i]:
@@ -207,7 +197,8 @@ def _model(f: FieldReader, entry: Any, at: str) -> JudgeModelSpec:
     for key in raw:
         if key not in MODEL_FIELDS:
             raise f.fail(f"{at}.{key}", f"unknown, expected one of {', '.join(MODEL_FIELDS)}")
-    provider = f.text(raw.get("provider"), f"{at}.provider").lower()
+    provider = f.enum(f.text(raw.get("provider"), f"{at}.provider").lower(),
+                      f"{at}.provider", Provider)
     model = f.text(raw.get("model"), f"{at}.model")
     if "family" in raw:
         family = raw["family"]
@@ -215,7 +206,7 @@ def _model(f: FieldReader, entry: Any, at: str) -> JudgeModelSpec:
             raise f.fail(f"{at}.family", "must be a non-empty list of Candidate tools")
         names = tuple(f.text(t, f"{at}.family[{i}]").lower() for i, t in enumerate(family))
     else:
-        names = DEFAULT_FAMILIES.get(provider, (provider,))
+        names = family_of(provider)
     if "env_var" in raw:
         env_var = f.text(raw["env_var"], f"{at}.env_var")
     else:
@@ -226,8 +217,8 @@ def _model(f: FieldReader, entry: Any, at: str) -> JudgeModelSpec:
 def parse_reply(
     reply: str, criteria: tuple[Criterion, ...], where: str
 ) -> dict[str, CriterionJudgement]:
-    """A Judge's reply as a score and one-line reason per Criterion; JudgeReplyError,
-    naming the Judge and Task, if it is malformed."""
+    """A judge model's reply as a score and one-line reason per Criterion;
+    JudgeReplyError, naming the judge model and Task, if it is malformed."""
     text = _strip_fence(reply)
     try:
         data = json.loads(text)
@@ -276,10 +267,14 @@ def same_family(spec: JudgeModelSpec, candidate_tool: str) -> bool:
 
 
 def is_candidate_under_test(
-    spec: JudgeModelSpec, candidate_tool: str, candidate_version: str
+    spec: JudgeModelSpec, candidate_provider: Provider | None, candidate_model: str
 ) -> bool:
-    """The same family and the same model id: the Candidate would grade itself."""
-    return same_family(spec, candidate_tool) and _norm(spec.model) == _norm(candidate_version)
+    """The judge model is the model the Candidate calls: the same provider and model id.
+
+    candidate_provider and candidate_model are what the Candidate actually calls
+    (bench.core.candidates.provider_for and model_for).
+    """
+    return spec.provider == candidate_provider and _norm(spec.model) == _norm(candidate_model)
 
 
 def _norm(model: str) -> str:
