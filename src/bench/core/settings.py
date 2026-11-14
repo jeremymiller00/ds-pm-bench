@@ -6,12 +6,14 @@ optional: the private root paths (ADR-0006), which are home paths not worth publ
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import yaml
 
+from bench.core.errors import ConfigEditRefused
 from bench.core.fields import FieldReader
 
 SETTINGS_FILE = "config/settings.yaml"
@@ -50,9 +52,53 @@ class Settings:
     private_roots: tuple[Path, ...]
 
 
+# The settings update_settings can change; mappings among them merge by key.
+EDITABLE_FIELDS = (
+    "tracks", "weights", "regression_margin", "retest_margin", "spot_check_rate",
+    "calibration", "normalization",
+)
+
+
 def load_settings(root: Path) -> Settings:
     f = FieldReader(SETTINGS_FILE)
+    return _parse(f, root, f.read(root))
+
+
+def edit_settings(
+    root: Path, changes: Mapping[str, Any], tracks_in_use: Mapping[str, list[str]]
+) -> Settings:
+    """Apply changes to config/settings.yaml, validate the result and write it back.
+
+    Each change replaces a top-level setting, except that a mapping (weights,
+    calibration, normalization) merges into the current one by key, so one weight or
+    one band can be given alone. Invalid changes raise ConfigError naming the field, and
+    dropping a Track in tracks_in_use (Track -> what uses it) raises ConfigEditRefused;
+    either way nothing is written.
+    """
+    f = FieldReader(SETTINGS_FILE)
     data = f.read(root)
+    for key, value in changes.items():
+        if key == "private_roots":
+            raise f.fail(key, f"belongs in the git-ignored {LOCAL_FILE}, not edited here")
+        if key not in EDITABLE_FIELDS:
+            raise f.fail(key, f"unknown, expected one of {', '.join(EDITABLE_FIELDS)}")
+        current = data.get(key)
+        if isinstance(value, dict) and isinstance(current, dict):
+            value = {**current, **value}
+        data[key] = value
+    settings = _parse(f, root, data)
+    for track, users in tracks_in_use.items():
+        if track not in settings.tracks:
+            raise ConfigEditRefused(
+                SETTINGS_FILE, "tracks",
+                f"cannot remove Track {track!r}: used by {', '.join(users)}; move "
+                "those Tasks to another Track first (a Run's Task version cannot move)",
+            )
+    f.write(root, data)
+    return settings
+
+
+def _parse(f: FieldReader, root: Path, data: dict[str, Any]) -> Settings:
     if "private_roots" in data:
         raise f.fail(
             "private_roots",

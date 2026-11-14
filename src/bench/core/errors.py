@@ -13,6 +13,11 @@ class ConfigError(ValueError):
         super().__init__(f"{file}: {field}: {message}")
 
 
+class ConfigEditRefused(ConfigError):
+    """A config edit that would invalidate what already exists, such as removing a Track
+    a Task or a Run's Task version uses. Names the file and field; nothing is written."""
+
+
 class UnknownTaskError(LookupError):
     """No Task with the requested id in any loaded root."""
 

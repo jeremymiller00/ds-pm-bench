@@ -29,6 +29,21 @@ class FieldReader:
             raise self.fail("(file)", f"is not valid YAML: {exc}") from exc
         return self.mapping(data, "(file)")
 
+    def write(self, root: Path, data: dict[str, Any]) -> None:
+        """Write data back as plain block YAML in its own key order, keeping the file's
+        leading comment block; comments further down are not kept."""
+        path = root / self.file
+        header = []
+        if path.is_file():
+            for line in path.read_text().splitlines():
+                if line.strip() and not line.startswith("#"):
+                    break
+                header.append(line)
+        body = yaml.safe_dump(data, sort_keys=False, allow_unicode=True)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        comments = "\n".join(header).strip()
+        path.write_text(f"{comments}\n\n{body}" if comments else body)
+
     def fail(self, field: str, message: str) -> ConfigError:
         return ConfigError(self.file, field, message)
 
