@@ -277,7 +277,9 @@ async def test_a_placeholder_manual_time_is_timed_with_a_stopwatch(
     assert Workspace.open(ws_dir).task("T2.1").manual_time_minutes == 25.5
 
 
-async def test_only_manual_assisted_candidates_are_offered_for_a_run(ws_dir: Path, clock):
+async def test_manual_assisted_and_automated_candidates_are_both_offered_for_a_run(
+    ws_dir: Path, clock
+):
     automated = candidate(tool="Api", version="1", baseline=False)
     write_candidate(ws_dir, "api@1", automated)
 
@@ -287,4 +289,4 @@ async def test_only_manual_assisted_candidates_are_offered_for_a_run(ws_dir: Pat
         offered = [value for _, value in app.query_one("#run-candidate", Select)._options]
 
     assert CANDIDATE in offered
-    assert "api@1" not in offered
+    assert "api@1" in offered

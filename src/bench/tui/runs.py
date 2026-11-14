@@ -1,10 +1,14 @@
-"""The Runs tab: start or resume a Run, then work its Tasks by hand.
+"""The Runs tab: start or resume a Run, work its Tasks by hand or send them to an
+automated Candidate and edit what comes back, then judge the Run.
 
 Everything goes through the Workspace and its Attempt; this module only shows
-what they report and passes on what the person types.
+what they report and passes on what the person types. Calls to a Candidate or a Judge
+run in Textual workers, off the UI, so a slow model never freezes the screen.
 """
 
 from __future__ import annotations
+
+import asyncio
 
 from textual import on
 from textual.app import ComposeResult, SuspendNotSupported
@@ -15,12 +19,15 @@ from textual.widgets import Button, Footer, Label, OptionList, Select, Static, T
 from textual.widgets.option_list import Option
 
 from bench.core.attempts import Attempt
+from bench.core.automated import PendingOutput
 from bench.core.errors import (
     AttemptError,
+    CandidateToolError,
     ClearanceError,
     ConfigError,
     EditorError,
     GateNotPassed,
+    MissingSecret,
     RunExists,
     RunMismatch,
     SuiteUnavailable,
@@ -42,6 +49,8 @@ RUN_ERRORS = (
     SuiteUnavailable,
     UnknownRunError,
 )
+# What can stop one automated Task from being sent; shown against that Task.
+SEND_ERRORS = (AttemptError, CandidateToolError, ClearanceError, GateNotPassed, MissingSecret)
 
 
 class RunsPane(Vertical):
@@ -56,12 +65,10 @@ class RunsPane(Vertical):
         super().__init__()
         self.workspace = workspace
         self.run: Run | None = None
+        self.send_errors: dict[str, str] = {}  # Task id -> why its last send failed
 
     def compose(self) -> ComposeResult:
-        # A Run here is worked by hand, so only manual-assisted Candidates are offered.
-        candidates = [
-            (c.id, c.id) for c in self.workspace.current_candidates if c.manual_assisted
-        ]
+        candidates = [(c.id, c.id) for c in self.workspace.current_candidates]
         with Horizontal(id="run-controls"):
             yield Select(candidates, prompt="Candidate", id="run-candidate")
             yield Select(
@@ -79,7 +86,9 @@ class RunsPane(Vertical):
             )
             yield Button("Resume Run", id="run-resume")
         yield Static("No Run open.", id="run-progress", markup=False)
-        yield Label("Pending Tasks (enter to work one)")
+        with Horizontal(id="run-actions"):
+            yield Button("Send pending Tasks", id="run-send", disabled=True)
+        yield Label("Pending Tasks (enter to work or edit one)")
         yield OptionList(id="run-tasks")
         yield Label("Tasks with Manual Time still a placeholder (enter to time one by hand)")
         yield OptionList(id="manual-time-tasks")
@@ -162,6 +171,8 @@ class RunsPane(Vertical):
 
     def _open(self, run: Run) -> None:
         self.run = run
+        self.send_errors = {}
+        self.query_one("#run-send", Button).disabled = run.candidate.manual_assisted
         self._show_progress()
 
     def _show_progress(self) -> None:
@@ -171,7 +182,47 @@ class RunsPane(Vertical):
         self.query_one("#run-progress", Static).update(run_progress(run))
         tasks = self.query_one("#run-tasks", OptionList)
         tasks.clear_options()
-        tasks.add_options(Option(task_id, id=task_id) for task_id in run.pending)
+        if run.candidate.manual_assisted:
+            tasks.add_options(Option(task_id, id=task_id) for task_id in run.pending)
+            return
+        tasks.add_options(
+            Option(self._automated_label(run, task_id), id=task_id) for task_id in run.pending
+        )
+
+    def _automated_label(self, run: Run, task_id: str) -> str:
+        if self.workspace.pending_output(run, task_id) is not None:
+            return f"{task_id}: raw Output ready to edit"
+        if task_id in self.send_errors:
+            return f"{task_id}: failed, send again to retry"
+        return f"{task_id}: not sent"
+
+    @on(Button.Pressed, "#run-send")
+    def _send(self) -> None:
+        if self.run is not None:
+            self.run_worker(self._send_pending(self.run), group="send", exclusive=True)
+
+    async def _send_pending(self, run: Run) -> None:
+        """Send each pending Task with no raw Output yet, one after another, off the UI
+        thread; a Task that fails is noted against it and the rest still go."""
+        button = self.query_one("#run-send", Button)
+        button.disabled = True
+        to_send = [t for t in run.pending if self.workspace.pending_output(run, t) is None]
+        lines = []
+        for n, task_id in enumerate(to_send, 1):
+            self._status(f"Sending {task_id} ({n} of {len(to_send)})...")
+            try:
+                pending = await asyncio.to_thread(
+                    self.workspace.run_automated_task, run, task_id
+                )
+            except SEND_ERRORS as exc:
+                self.send_errors[task_id] = str(exc)
+                lines.append(f"{task_id} failed: {exc}")
+            else:
+                self.send_errors.pop(task_id, None)
+                lines.append(pending_summary(pending))
+            self._show_progress()
+        button.disabled = False
+        self._status("\n".join(lines) or "Nothing to send: every pending Task has a raw Output.")
 
     @on(OptionList.OptionSelected, "#run-tasks")
     def _work_task(self, event: OptionList.OptionSelected) -> None:
@@ -391,6 +442,17 @@ def run_progress(run: Run) -> str:
         lines.append("Excluded, still a placeholder:")
         lines += [f"  {task_id}: {', '.join(what)}" for task_id, what in run.excluded.items()]
     return "\n".join(lines)
+
+
+def pending_summary(pending: PendingOutput) -> str:
+    cost = f"cost ${pending.cost_usd:.2f}" if pending.cost_usd is not None else (
+        f"cost unknown ({pending.cost_note})"
+    )
+    retried = ", after one retry" if pending.tries > 1 else ""
+    return (
+        f"{pending.task_id}: raw Output ready to edit, latency "
+        f"{clock_time(pending.latency_seconds)}, {cost}{retried}."
+    )
 
 
 def output_summary(record: OutputRecord) -> str:
