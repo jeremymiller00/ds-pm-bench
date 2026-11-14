@@ -28,6 +28,11 @@ which is git-ignored because the paths are machine-specific. Copy
 `config/local.example.yaml` to start; without it no Private Tasks load.
 `private_roots` in the public `config/settings.yaml` is refused.
 
+In the TUI's Tasks tab, `e` edits the highlighted Task and `n` scaffolds a new one
+(private only when a private root is configured); `ctrl+s` saves, `escape` cancels.
+Saving shows the Task's version, and whether the edit made a new one because a Run
+used the old (ADR 0003). Validation errors appear inline in the form.
+
 ### 1. Record a Run from results files
 
 A results folder holds one `<task id>.yaml` per Task in the Suite (an unknown key

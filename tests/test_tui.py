@@ -328,3 +328,27 @@ async def test_a_new_task_the_workspace_refuses_is_shown_inline(workspace_dir: P
 
     assert "already exists" in first
     assert "id" in second and "T<track>.<n>" in second
+
+
+async def test_create_edit_run_then_edit_bumps_the_version(workspace_dir: Path):
+    app = BenchApp(Workspace.open(workspace_dir))
+    async with app.run_test() as pilot:
+        await fill_new_task(app, pilot, "T2.1")
+        await open_editor(app, pilot, "T2.1")
+        fill(app, "#edit-input", "Sales wants a lead-scoring spec.")
+        fill(app, "#edit-gold", "Spec: score leads weekly; success is +5% conversion.")
+        fill(app, "#edit-manual-time", "30")
+        await pilot.press("ctrl+s")
+        await pilot.pause()
+        assert tree_outline(app)["Specs (1)"] == ["T2.1  public  v1  ready"]
+
+        run_over(workspace_dir)  # a fixture Run uses v1
+
+        await open_editor(app, pilot, "T2.1")
+        fill(app, "#edit-trap", "Leaves the success metric undefined.")
+        await pilot.press("ctrl+s")
+        await pilot.pause()
+        assert tree_outline(app)["Specs (1)"] == ["T2.1  public  v2  ready"]
+        status = str(app.query_one("#task-status", Static).content)
+
+    assert "T2.1 saved as v2 (a new version: a Run used v1)" in status
