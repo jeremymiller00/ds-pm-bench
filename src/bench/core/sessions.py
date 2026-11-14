@@ -69,11 +69,16 @@ class ManualSession:
     def edit_externally(self) -> str:
         """Open the draft in the Editor Adapter ($EDITOR); returns the edited text,
         which becomes the draft. All the time it is open counts as active time."""
+        self.check_editable()
+        self.draft = self._editor.edit(self.draft or "")
+        return self.draft
+
+    def check_editable(self) -> None:
+        """Raise ValueError if the draft cannot be opened in $EDITOR now: before the raw
+        Output is submitted, or while paused. Lets a TUI refuse before suspending."""
         self._need_raw("edit")
         if self.paused:
             raise ValueError(f"Task {self.task_id}: resume the paused timer before editing")
-        self.draft = self._editor.edit(self.draft or "")
-        return self.draft
 
     def finish(self, final: str | None = None) -> OutputRecord:
         """Save raw and final (the draft when final is omitted) with timings and cost.

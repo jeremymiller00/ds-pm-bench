@@ -3,6 +3,7 @@
 A fake Clock and Editor stand in for time and $EDITOR, so nothing here waits on wall time.
 """
 
+import contextlib
 import shutil
 from pathlib import Path
 
@@ -14,7 +15,7 @@ from bench import Workspace
 from bench.tui.app import BenchApp
 from bench.tui.runs import ManualTaskScreen
 from test_workspace_candidates import candidate, write_candidate
-from test_workspace_manual_session import FakeClock
+from test_workspace_manual_session import FakeClock, FakeEditor
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 CANDIDATE = "chatbot@web-1"
@@ -112,3 +113,71 @@ async def test_a_full_run_of_the_example_task_completes_with_no_api(
     assert "1/1 Tasks recorded" in progress
     saved = results(ws_dir)
     assert (saved["active_seconds"], saved["latency_seconds"]) == (180, 60)
+
+
+async def test_pause_is_refused_before_the_raw_output_then_stops_the_timer(
+    ws_dir: Path, clock: FakeClock
+):
+    app = BenchApp(Workspace.open(ws_dir, clock=clock))
+    async with app.run_test() as pilot:
+        await start_run(app, pilot)
+        screen = await open_task(app, pilot)
+        await pilot.press("escape", "p")
+        assert not screen.session.paused
+        assert "submit the raw Output before you pause" in text(app, "#task-error")
+
+        clock.advance(30)
+        await paste_raw(app, pilot, "Raw draft.")
+        await pilot.press("escape", "p")
+        assert screen.session.paused
+        assert screen.query_one("#task-draft", TextArea).read_only
+        assert "paused" in text(app, "#task-timer")
+
+        clock.advance(600)  # an interruption: none of it counts
+        await pilot.press("e")
+        assert "resume the paused timer before editing" in text(app, "#task-error")
+        await pilot.press("p")
+        assert not screen.session.paused
+        assert not screen.query_one("#task-draft", TextArea).read_only
+
+        clock.advance(45)
+        await pilot.press("ctrl+s")
+        await pilot.pause()
+
+    saved = results(ws_dir)
+    assert (saved["active_seconds"], saved["latency_seconds"]) == (75, 30)
+
+
+async def test_editing_in_editor_suspends_the_app_and_counts_all_its_open_time(
+    ws_dir: Path, clock: FakeClock
+):
+    editor = FakeEditor(clock, returns="Predict SMB churn 60 days ahead.", open_seconds=240)
+    app = BenchApp(Workspace.open(ws_dir, clock=clock, editor=editor))
+    suspended: list[bool] = []
+
+    @contextlib.contextmanager
+    def suspend():  # the terminal is the boundary: record that the app gave it up
+        suspended.append(True)
+        yield
+
+    app.suspend = suspend
+    async with app.run_test() as pilot:
+        await start_run(app, pilot)
+        screen = await open_task(app, pilot)
+        assert "all the time it is open counts" in text(app, "#task-help")
+        clock.advance(10)
+        await paste_raw(app, pilot, "Predict churn for every customer next year.")
+        await pilot.press("escape", "e")
+        await pilot.pause()
+        assert suspended == [True]
+        assert editor.opened_with == ["Predict churn for every customer next year."]
+        assert screen.query_one("#task-draft", TextArea).text == (
+            "Predict SMB churn 60 days ahead."
+        )
+        await pilot.press("ctrl+s")
+        await pilot.pause()
+
+    saved = results(ws_dir)
+    assert (saved["active_seconds"], saved["latency_seconds"]) == (250, 10)
+    final = next((ws_dir / "runs").glob(f"*/final/{EXAMPLE}.md")).read_text()
+    assert final == "Predict SMB churn 60 days ahead."

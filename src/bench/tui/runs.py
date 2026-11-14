@@ -6,8 +6,10 @@ what they report and passes on what the person types.
 
 from __future__ import annotations
 
+import subprocess
+
 from textual import on
-from textual.app import ComposeResult
+from textual.app import ComposeResult, SuspendNotSupported
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.screen import Screen
@@ -128,6 +130,8 @@ class ManualTaskScreen(Screen[OutputRecord | None]):
         Binding("ctrl+s", "save", "Submit / Save", priority=True),
         Binding("escape", "leave_text", "Leave text box"),
         Binding("c", "copy_prompt", "Copy prompt"),
+        Binding("p", "pause_resume", "Pause / resume"),
+        Binding("e", "external_editor", "$EDITOR"),
         Binding("a", "abandon", "Abandon"),
     ]
 
@@ -202,6 +206,29 @@ class ManualTaskScreen(Screen[OutputRecord | None]):
             return
         self.dismiss(record)
 
+    def action_pause_resume(self) -> None:
+        s = self.session
+        try:
+            s.resume() if s.paused else s.pause()
+        except ValueError as exc:
+            self._error(str(exc))
+            return
+        self.query_one("#task-draft", TextArea).read_only = s.paused
+        self._error("Paused: the timer is stopped; p resumes." if s.paused else "")
+        self.refresh_timer()
+
+    def action_external_editor(self) -> None:
+        try:
+            self.session.check_editable()  # refuse before giving up the terminal
+            with self.app.suspend():
+                draft = self.session.edit_externally()
+        except (ValueError, SuspendNotSupported, subprocess.CalledProcessError) as exc:
+            self._error(str(exc))
+            return
+        self.query_one("#task-draft", TextArea).text = draft
+        self._error("")
+        self.refresh_timer()
+
     def action_abandon(self) -> None:
         self.session.abandon()
         self.dismiss(None)
@@ -210,13 +237,18 @@ class ManualTaskScreen(Screen[OutputRecord | None]):
         self.query_one("#task-error", Static).update(message)
 
 
+EDITOR_NOTE = (
+    "e opens the draft in $EDITOR; the app suspends and all the time it is open counts "
+    "as active time."
+)
 PASTE_HELP = (
     "The timer is running. Copy the prompt (escape, then c) into the Candidate, paste "
-    "its raw Output below and press ctrl+s. a abandons, recording nothing."
+    "its raw Output below and press ctrl+s. Then edit here or in $EDITOR: "
+    + EDITOR_NOTE + " a abandons, recording nothing."
 )
 EDIT_HELP = (
     "Edit the final below and press ctrl+s to save. Outside a text box (escape): "
-    "a abandons."
+    "p pauses or resumes the timer; " + EDITOR_NOTE + " a abandons, recording nothing."
 )
 
 
