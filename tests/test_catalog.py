@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from bench import Workspace
+from bench import TaskAuthoringError, Workspace
 from bench.cli import main
 from test_workspace_tasks import configure_private_root, write_task
 
@@ -98,3 +98,10 @@ def test_the_catalog_never_scaffolds_public_tasks(workspace_dir: Path):
     with pytest.raises(SystemExit):  # --root is required
         main(["--workspace", str(workspace_dir), "scaffold-catalog"])
     assert not (workspace_dir / "tasks").exists()
+
+
+def test_a_clash_is_a_task_authoring_error(workspace_dir: Path, private_root: Path):
+    write_task(private_root, "T2.2", track="Specs")
+
+    with pytest.raises(TaskAuthoringError, match="T2.2"):
+        Workspace.open(workspace_dir).scaffold_catalog(private_root)

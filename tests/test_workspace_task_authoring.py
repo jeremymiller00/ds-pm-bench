@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from bench import ConfigError, TaskEditRefused, TaskNotRunnable, Workspace
+from bench import ConfigError, TaskAuthoringError, TaskEditRefused, TaskNotRunnable, Workspace
 from test_workspace_candidates import write_candidate
 from test_workspace_runs import cleared
 
@@ -77,7 +77,7 @@ def test_a_new_task_in_an_unconfigured_root_is_refused(
     elsewhere = tmp_path / "elsewhere"
     elsewhere.mkdir()
 
-    with pytest.raises(ValueError, match="not a configured private root"):
+    with pytest.raises(TaskAuthoringError, match="not a configured private root"):
         new_task(Workspace.open(workspace_dir), private_root=elsewhere)
 
     assert not (elsewhere / "tasks").exists()
@@ -134,7 +134,7 @@ def test_a_new_task_cannot_reuse_an_id_from_any_root(
     ws = Workspace.open(workspace_dir)
     new_task(ws, "T2.1", track="Specs", private_root=private_root)
 
-    with pytest.raises(ValueError, match="T2.1 already exists"):
+    with pytest.raises(TaskAuthoringError, match="T2.1 already exists"):
         new_task(ws, "T2.1", track="Specs")
 
 
@@ -260,3 +260,11 @@ def test_a_canonical_prompt_that_is_not_text_is_refused_naming_the_field(
 
     assert err.value.field == "(canonical prompt)"
     assert Workspace.open(workspace_dir).task("T1.1") == before
+
+
+def test_an_edit_refusal_is_a_task_authoring_error(workspace_dir: Path):
+    ws = Workspace.open(workspace_dir)
+    new_task(ws)
+
+    with pytest.raises(TaskAuthoringError):
+        ws.update_task("T1.1", version=3)

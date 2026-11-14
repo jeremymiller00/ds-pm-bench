@@ -11,7 +11,12 @@ from typing import Any
 from bench.core.candidates import Candidate, load_candidates
 from bench.core.catalog import CATALOG
 from bench.core.decisions import log_verdict, read_log
-from bench.core.errors import TaskNotRunnable, UnknownCandidateError, UnknownTaskError
+from bench.core.errors import (
+    TaskAuthoringError,
+    TaskNotRunnable,
+    UnknownCandidateError,
+    UnknownTaskError,
+)
 from bench.core.kinds import Suite
 from bench.core.lookup import find_by_id
 from bench.core.prices import PriceTable, load_prices
@@ -97,11 +102,14 @@ class Workspace:
 
         It is a Public Task under tasks/ unless private_root names one of the
         configured private roots (ADR-0006). criteria are the task-specific
-        Criteria, as Criterion or {id, name, description}. Invalid fields raise
-        ConfigError naming the field, and nothing is written.
+        Criteria, each {id, name, description}. Invalid fields raise ConfigError
+        naming the field; a taken id or an unconfigured root raises
+        TaskAuthoringError. Either way nothing is written.
         """
         if find_by_id(self.tasks, task_id) is not None:
-            raise ValueError(f"Task {task_id} already exists in {self.task(task_id).folder}")
+            raise TaskAuthoringError(
+                f"Task {task_id} already exists in {self.task(task_id).folder}"
+            )
         ctx = self.task_context
         root = ctx.public_root if private_root is None else self._private_root(private_root)
         task = scaffold_task(
@@ -151,7 +159,7 @@ class Workspace:
             or (root.tasks_folder / entry.id).exists()
         ]
         if clashes:
-            raise ValueError(
+            raise TaskAuthoringError(
                 f"catalog Tasks already exist, not overwriting: {', '.join(clashes)}"
             )
         return tuple(
@@ -163,7 +171,7 @@ class Workspace:
         resolved = (self.root / Path(path).expanduser()).resolve()
         if resolved not in self.settings.private_roots:
             configured = ", ".join(map(str, self.settings.private_roots)) or "none"
-            raise ValueError(
+            raise TaskAuthoringError(
                 f"{resolved} is not a configured private root (configured: {configured})"
             )
         return self.task_context.private_root(resolved)

@@ -11,7 +11,7 @@ from textual.containers import VerticalScroll
 from textual.screen import ModalScreen
 from textual.widgets import Button, Input, Label, Select, Static, TextArea
 
-from bench.core.errors import ConfigError, TaskEditRefused
+from bench.core.errors import ConfigError, TaskAuthoringError
 from bench.core.kinds import Visibility
 from bench.core.rubric import criterion_dict
 from bench.core.tasks import Task
@@ -26,6 +26,11 @@ EDITOR_CSS = """
 
 class FormError(ValueError):
     """A field the form could not turn into a value for the Workspace."""
+
+
+# What both screens show inline instead of saving: a field the form could not read,
+# an invalid field, or a refused create or edit.
+AUTHORING_ERRORS = (FormError, ConfigError, TaskAuthoringError)
 
 
 class TaskEditorScreen(ModalScreen[Task | None]):
@@ -84,7 +89,7 @@ class TaskEditorScreen(ModalScreen[Task | None]):
                 "criteria": parse_criteria(self.query_one("#edit-criteria", TextArea).text),
             }
             task = self.workspace.update_task(self.task_id, **changes)
-        except (FormError, ConfigError, TaskEditRefused) as error:
+        except AUTHORING_ERRORS as error:
             self.query_one("#editor-error", Static).update(str(error))
             return
         self.dismiss(task)
@@ -158,7 +163,7 @@ class NewTaskScreen(ModalScreen[Task | None]):
                 ),
                 private_root=None if where == Visibility.PUBLIC else str(where),
             )
-        except ValueError as error:  # FormError, ConfigError, or a refused id or root
+        except AUTHORING_ERRORS as error:
             self.query_one("#new-error", Static).update(str(error))
             return
         self.dismiss(task)
