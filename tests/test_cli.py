@@ -25,7 +25,9 @@ BASELINE_RUN = f"{DAY}-{BASELINE}"
 def golden_workspace(case: str, tmp_path: Path) -> Path:
     """A throwaway workspace: the committed config and examples/ plus the case's Candidates."""
     root = tmp_path / "bench"
-    shutil.copytree(REPO_ROOT / "config", root / "config")
+    shutil.copytree(
+        REPO_ROOT / "config", root / "config", ignore=shutil.ignore_patterns("local.yaml")
+    )
     shutil.copytree(REPO_ROOT / "examples", root / "examples")
     shutil.copytree(GOLDEN / case / "candidates", root / "candidates")
     return root

@@ -1,4 +1,8 @@
-"""Benchmark settings: config/settings.yaml (Tracks, weights, margins, bands, roots)."""
+"""Benchmark settings: config/settings.yaml, plus the machine-specific config/local.yaml.
+
+settings.yaml is public: Tracks, weights, margins, bands. local.yaml is git-ignored and
+optional: the private root paths (ADR-0006), which are home paths not worth publishing.
+"""
 
 from __future__ import annotations
 
@@ -6,9 +10,13 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+import yaml
+
 from bench.core.fields import FieldReader
 
 SETTINGS_FILE = "config/settings.yaml"
+LOCAL_FILE = "config/local.yaml"
+LOCAL_FIELDS = ("private_roots",)
 
 DIMENSIONS = ("quality", "edit_distance", "time_saved", "cost_latency")
 
@@ -45,6 +53,11 @@ class Settings:
 def load_settings(root: Path) -> Settings:
     f = FieldReader(SETTINGS_FILE)
     data = f.read(root)
+    if "private_roots" in data:
+        raise f.fail(
+            "private_roots",
+            f"belongs in the git-ignored {LOCAL_FILE}, not the public settings",
+        )
     calibration = f.mapping(data.get("calibration"), "calibration")
     f.exact_keys(calibration, "calibration", ("within_one_point", "weighted_kappa"))
     return Settings(
@@ -64,8 +77,26 @@ def load_settings(root: Path) -> Settings:
             ),
         ),
         normalization=_normalization(f, data.get("normalization")),
-        private_roots=_private_roots(f, root, data.get("private_roots", [])),
+        private_roots=_load_private_roots(root),
     )
+
+
+def _load_private_roots(root: Path) -> tuple[Path, ...]:
+    """The private roots in config/local.yaml; none when the file is absent."""
+    if not (root / LOCAL_FILE).is_file():
+        return ()
+    f = FieldReader(LOCAL_FILE)
+    try:
+        empty = yaml.safe_load((root / LOCAL_FILE).read_text()) is None
+    except yaml.YAMLError:
+        empty = False  # f.read reports it, naming the file
+    if empty:
+        return ()  # blank or comments only, such as a fresh copy of the example
+    data = f.read(root)
+    for key in data:
+        if key not in LOCAL_FIELDS:
+            raise f.fail(str(key), f"unknown, expected one of {', '.join(LOCAL_FIELDS)}")
+    return _private_roots(f, root, data.get("private_roots", []))
 
 
 def _tracks(f: FieldReader, value: Any) -> tuple[str, ...]:
@@ -91,6 +122,12 @@ def _private_roots(f: FieldReader, root: Path, value: Any) -> tuple[Path, ...]:
         path = (root / Path(entry).expanduser()).resolve()
         if not path.is_dir():
             raise f.fail(field, f"directory {path} does not exist")
+        if path.is_relative_to(root.resolve()):
+            raise f.fail(
+                field,
+                f"{path} is inside the public Workspace root {root.resolve()}; a private "
+                "root must be a separate repo outside it (ADR-0006)",
+            )
         roots.append(path)
     return tuple(roots)
 

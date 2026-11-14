@@ -1,5 +1,6 @@
 """The `bench` command line: a thin client over the Workspace. No business logic here.
 
+  bench [tui]                                        open the TUI on the Workspace
   bench run CANDIDATE --results DIR [--on DATE] [--suite public_only]
                                                      start a Run and record results
   bench run --resume RUN_ID --results DIR            record results into an open Run
@@ -7,6 +8,7 @@
   bench score RUN_ID                                 print a Run's scores
   bench verdict CHALLENGER_RUN BASELINE_RUN [...]    compare two Runs, print the Verdict
   bench verdict --gate CANDIDATE [...]               the Verdict for a failed Gate
+  bench scaffold-catalog --root PRIVATE_ROOT         create the 12 catalog Tasks there
 
 A results directory holds one <task id>.yaml per Task, with raw, final,
 active_seconds, latency_seconds, cost_usd and (optionally) criterion_scores.
@@ -120,6 +122,14 @@ def _verdict(ws: Workspace, args: argparse.Namespace) -> int:
     return 0
 
 
+def _scaffold_catalog(ws: Workspace, args: argparse.Namespace) -> int:
+    tasks = ws.scaffold_catalog(args.root)
+    for task in tasks:
+        print(f"created {task.id} ({task.track}) in {task.folder}")
+    print(f"created {len(tasks)} Private Tasks; placeholders: {', '.join(tasks[0].placeholders)}")
+    return 0
+
+
 def _print_verdict(verdict: Verdict) -> None:
     print(f"Verdict: {verdict.label}")
     print(f"  {verdict.candidate_id} vs Baseline {verdict.baseline_id}")
@@ -129,6 +139,13 @@ def _print_verdict(verdict: Verdict) -> None:
         print(f"  Regressions: {', '.join(verdict.regressions)}")
     for warning in verdict.warnings:
         print(f"  warning: {warning}")
+
+
+def _tui(ws: Workspace, args: argparse.Namespace) -> int:
+    from bench.tui.app import BenchApp  # Textual loads only when the TUI is opened
+
+    BenchApp(ws).run()
+    return 0
 
 
 def _date(text: str) -> datetime.date:
@@ -143,7 +160,11 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--workspace", default=".", help="the benchmark repo root (default: current directory)"
     )
-    commands = parser.add_subparsers(required=True, metavar="COMMAND")
+    parser.set_defaults(command=_tui)
+    commands = parser.add_subparsers(metavar="COMMAND")
+
+    tui = commands.add_parser("tui", help="open the TUI (the default with no COMMAND)")
+    tui.set_defaults(command=_tui)
 
     run = commands.add_parser("run", help="start or resume a Run and record results from files")
     run.add_argument("candidate", nargs="?", help="the Candidate to Run, <tool>@<version>")
@@ -181,4 +202,16 @@ def _parser() -> argparse.ArgumentParser:
     verdict.add_argument("--on", type=_date, help="the Decision Log date (default: today)")
     verdict.add_argument("--judge-setup-hash", help="Judge setup recorded with the entry")
     verdict.set_defaults(command=_verdict)
+
+    catalog = commands.add_parser(
+        "scaffold-catalog",
+        help="create the 12 catalog Tasks as Private Tasks with placeholders",
+    )
+    catalog.add_argument(
+        "--root",
+        required=True,
+        metavar="PRIVATE_ROOT",
+        help="a private root listed in config/local.yaml",
+    )
+    catalog.set_defaults(command=_scaffold_catalog)
     return parser

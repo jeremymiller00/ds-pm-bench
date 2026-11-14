@@ -26,6 +26,10 @@ _Avoid_: Internal task, secret task
 The single built-in failure mode a Task is designed to expose, such as inventing a metric the input never states.
 _Avoid_: Gotcha, edge case
 
+**Output Shape**:
+The form a Task's output must take, such as "ranked list, value vs. likelihood of success". Describes the format, not the content.
+_Avoid_: Expected output, template
+
 **Gold Answer**:
 The PM-written or PM-approved reference output for a Task, used by the Judge and never shown to a Candidate.
 _Avoid_: Ground truth, expected output, reference

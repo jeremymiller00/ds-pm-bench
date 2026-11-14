@@ -35,7 +35,7 @@ ds-pm-bench/
   src/bench/    core/  adapters/  cli.py  tui/
   tests/
 
-ds-pm-bench-private/   (separate private repo, path in config)
+ds-pm-bench-private/   (separate private repo, path in git-ignored config/local.yaml)
   tasks/        T1.1/ ... T4.3/   (catalog Tasks, private by default)
   runs/         <date>-<candidate>/ raw/ final/ judge-reasons.json
   calibration/  private calibration items
@@ -54,7 +54,7 @@ Each slice is demoable and tested without network access.
 - Done when: `bench verdict` on two fixture Runs gives the expected Verdict.
 
 ### 2. Task library
-- Scaffold the 12 Tasks from the doc's catalog as Private Tasks in the private root (id, Track, Trap, expected output, task-specific Criteria, Manual Time field).
+- Scaffold the 12 Tasks from the doc's catalog as Private Tasks in the private root (id, Track, Trap, output shape, task-specific Criteria, Manual Time field).
 - Draft Canonical Prompts from `ai-pm-toolkit/prompts` where they map; inputs and Gold Answers start as `TODO`.
 - TUI task browser (showing visibility), editor and new-task scaffold that asks public or private. A Task edit bumps its version.
 - The harness refuses to run a Task whose Gold Answer is `TODO`.

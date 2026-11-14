@@ -17,6 +17,15 @@ class UnknownTaskError(LookupError):
     """No Task with the requested id in any loaded root."""
 
 
+class TaskAuthoringError(ValueError):
+    """Creating or editing a Task was refused: an id taken, a root not configured,
+    a catalog Task already present, or a field an edit cannot change."""
+
+
+class TaskEditRefused(TaskAuthoringError):
+    """An edit asked to change what an edit cannot: visibility, id or version."""
+
+
 class TaskNotRunnable(Exception):
     """The harness refuses to run a Task that still holds a placeholder."""
 

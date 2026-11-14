@@ -45,7 +45,5 @@ normalization:
     better: lower
     thresholds: [10, 30, 60, 120]
 
-# Private Task roots (ADR-0006): separate private git repos holding Private Tasks
-# and every content-bearing artifact for them. Relative paths resolve against
-# this repo's root, "~" expands. Empty means Private Tasks cannot be Run.
-private_roots: []
+# Private Task roots (ADR-0006) are machine-specific, so they live in the git-ignored
+# config/local.yaml, not here. Copy config/local.example.yaml to start.

@@ -1,0 +1,8 @@
+# Machine-specific config. Copy to config/local.yaml (git-ignored) and edit.
+#
+# Private Task roots (ADR-0006): separate private git repos holding Private Tasks
+# and every content-bearing artifact for them. Relative paths resolve against
+# this repo's root, "~" expands. Absent or empty means Private Tasks cannot be Run.
+#
+# private_roots:
+#   - ../ds-pm-bench-private

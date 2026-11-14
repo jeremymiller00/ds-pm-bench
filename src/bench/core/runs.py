@@ -35,7 +35,7 @@ from bench.core.kinds import Clearance, Suite, Visibility
 from bench.core.lookup import find_by_id
 from bench.core.results import TaskResult
 from bench.core.rubric import check_criterion_score
-from bench.core.tasks import Task
+from bench.core.tasks import Task, TaskContext, load_version
 
 RUNS_FOLDER = "runs"
 RUN_FILE = "run.yaml"
@@ -61,7 +61,8 @@ class Run:
     tasks: tuple[Task, ...]  # the Suite, at the versions this Run uses
     folder: Path  # runs/<id>/ in the public repo
     # Tasks the Suite would cover but left out because they still hold a placeholder:
-    # Task id -> what is a placeholder ("input", "Gold Answer", "Manual Time").
+    # Task id -> what is a placeholder ("input", "Gold Answer", "Manual Time",
+    # "Canonical Prompt").
     excluded: Mapping[str, tuple[str, ...]] = field(default_factory=dict)
 
     @property
@@ -235,6 +236,13 @@ class Run:
                     )
                 )
         return tuple(checks)
+
+    @property
+    def complete(self) -> bool:
+        """Every Task in the Suite has its Output and Criterion scores recorded."""
+        return all(
+            "criterion_scores" in (self._task_record(t.id) or {}) for t in self.tasks
+        )
 
     @property
     def pending(self) -> tuple[str, ...]:
@@ -432,14 +440,27 @@ def _candidate_snapshot(c: Candidate) -> dict[str, Any]:
     }
 
 
+def task_versions_used(workspace_root: Path) -> set[tuple[str, int]]:
+    """Every (Task id, version) some Run's snapshot holds; frozen per ADR-0003."""
+    used: set[tuple[str, int]] = set()
+    for path in (workspace_root / RUNS_FOLDER).glob(f"*/{RUN_FILE}"):
+        snapshot = yaml.safe_load(path.read_text()) or {}
+        used.update((task_id, v) for task_id, v in (snapshot.get("tasks") or {}).items())
+    return used
+
+
 def open_run(
-    workspace_root: Path,
+    ctx: TaskContext,
     run_id: str,
     candidates: Mapping[str, Candidate],
     workspace_tasks: tuple[Task, ...],
 ) -> Run:
-    """Load a Run from its snapshot, refusing if anything it used has changed (ADR-0003)."""
-    folder = workspace_root / RUNS_FOLDER / run_id
+    """Load a Run from its snapshot, refusing if anything it used has changed (ADR-0003).
+
+    A Task since bumped is loaded at the version the Run used, from its archive. A Run
+    still unfinished is refused instead: it must finish on the versions it started with.
+    """
+    folder = ctx.workspace_root / RUNS_FOLDER / run_id
     if not (folder / RUN_FILE).is_file():
         raise UnknownRunError(f"no Run {run_id!r} in {RUNS_FOLDER}/")
     snapshot = yaml.safe_load((folder / RUN_FILE).read_text())
@@ -450,14 +471,20 @@ def open_run(
     check_gate(candidate)
     by_id = {t.id: t for t in workspace_tasks}
     tasks = []
+    bumped = []
     for task_id, version in snapshot["tasks"].items():
         task = by_id.get(task_id)
-        if task is None or task.version != version:
+        used = task if task is None or task.version == version else (
+            load_version(ctx, task, version)
+        )
+        if used is None:
             found = "missing" if task is None else f"now version {task.version}"
             raise RunMismatch(f"Run {run_id} used Task {task_id} version {version}, {found}")
-        check_clearance(candidate, task)
-        tasks.append(task)
-    return Run(
+        if used is not task:
+            bumped.append(f"Task {task_id} version {version} is now version {task.version}")
+        check_clearance(candidate, used)
+        tasks.append(used)
+    run = Run(
         id=run_id,
         candidate=candidate,
         date=datetime.date.fromisoformat(snapshot["date"]),
@@ -469,3 +496,9 @@ def open_run(
             for task_id, missing in snapshot.get("excluded", {}).items()
         },
     )
+    if bumped and not run.complete:
+        raise RunMismatch(
+            f"Run {run_id} cannot resume: {'; '.join(bumped)}, and a Run must finish "
+            "on the Task versions it started with"
+        )
+    return run

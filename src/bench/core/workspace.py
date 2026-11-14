@@ -3,14 +3,21 @@
 from __future__ import annotations
 
 import datetime
+import shutil
 from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from bench.core.candidates import Candidate, load_candidates
+from bench.core.catalog import CATALOG
 from bench.core.decisions import log_verdict, read_log
-from bench.core.errors import TaskNotRunnable, UnknownCandidateError, UnknownTaskError
+from bench.core.errors import (
+    TaskAuthoringError,
+    TaskNotRunnable,
+    UnknownCandidateError,
+    UnknownTaskError,
+)
 from bench.core.kinds import Suite
 from bench.core.lookup import find_by_id
 from bench.core.prices import PriceTable, load_prices
@@ -23,16 +30,30 @@ from bench.core.runs import (
     choose_suite,
     create_run,
     open_run,
+    task_versions_used,
     tasks_in,
 )
 from bench.core.scoring import RunScore, score_run
-from bench.core.settings import Settings, load_settings
-from bench.core.tasks import Task, load_tasks
+from bench.core.settings import SETTINGS_FILE, Settings, load_settings
+from bench.core.tasks import (
+    CriterionSpec,
+    Task,
+    TaskContext,
+    TaskRoot,
+    edit_task,
+    load_tasks,
+    scaffold_task,
+)
 from bench.core.verdicts import Comparison, Verdict, compare, gate_verdict
 
 
-@dataclass(frozen=True)
+@dataclass
 class Workspace:
+    """Opened from the repo root holding config/, Tasks, Candidates and Runs.
+
+    tasks is replaced when a Task is created or edited.
+    """
+
     root: Path
     settings: Settings
     rubric: Rubric
@@ -45,14 +66,21 @@ class Workspace:
         root = Path(path).resolve()
         settings = load_settings(root)
         rubric = load_rubric(root)
+        ctx = TaskContext(root, settings.private_roots, rubric, settings.tracks)
         return cls(
             root=root,
             settings=settings,
             rubric=rubric,
             prices=load_prices(root),
-            tasks=load_tasks(root, settings.private_roots, rubric, settings.tracks),
+            tasks=load_tasks(ctx),
             candidates=load_candidates(root),
         )
+
+    @property
+    def task_context(self) -> TaskContext:
+        """What loading, scaffolding or editing a Task needs from this Workspace."""
+        return TaskContext(self.root, self.settings.private_roots, self.rubric,
+                           self.settings.tracks)
 
     def task(self, task_id: str) -> Task:
         task = find_by_id(self.tasks, task_id)
@@ -63,8 +91,123 @@ class Workspace:
         )
         raise UnknownTaskError(f"no Task {task_id!r}{hint}")
 
+    def create_task(
+        self,
+        task_id: str,
+        *,
+        track: str,
+        trap: str,
+        canonical_prompt: str,
+        criteria: Iterable[CriterionSpec],
+        manual_time_minutes: int | float | None = None,
+        private_root: str | Path | None = None,
+        name: str | None = None,
+        output_shape: str | None = None,
+    ) -> Task:
+        """Scaffold a new Task at version 1 with a TODO input and Gold Answer.
+
+        It is a Public Task under tasks/ unless private_root names one of the
+        configured private roots (ADR-0006). criteria are the task-specific
+        Criteria, each {id, name, description}. name and output_shape are the
+        catalog's task name and Output shape, optional. Invalid fields raise ConfigError
+        naming the field; a taken id or an unconfigured root raises
+        TaskAuthoringError. Either way nothing is written.
+        """
+        if find_by_id(self.tasks, task_id) is not None:
+            raise TaskAuthoringError(
+                f"Task {task_id} already exists in {self.task(task_id).folder}"
+            )
+        ctx = self.task_context
+        root = ctx.public_root if private_root is None else self._private_root(private_root)
+        task = scaffold_task(
+            ctx,
+            root,
+            task_id,
+            track=track,
+            trap=trap,
+            canonical_prompt=canonical_prompt,
+            criteria=criteria,
+            manual_time_minutes=manual_time_minutes,
+            name=name,
+            output_shape=output_shape,
+        )
+        self._reload_tasks()
+        return task
+
+    def update_task(self, task_id: str, **changes: Any) -> Task:
+        """Edit a Task's fields: name, track, trap, output_shape, canonical_prompt,
+        criteria, manual_time_minutes, input (text) and gold_answer (text).
+
+        If any Run used the Task's current version, the edit is a new version;
+        otherwise it is made in place (ADR-0003). Visibility, id and version cannot
+        be edited (TaskEditRefused). Invalid fields raise ConfigError and the files
+        are left as they were.
+        """
+        task = self.task(task_id)
+        edited = edit_task(
+            self.task_context,
+            task,
+            changes,
+            used=(task.id, task.version) in task_versions_used(self.root),
+        )
+        self._reload_tasks()
+        return edited
+
+    def scaffold_catalog(self, private_root: str | Path) -> tuple[Task, ...]:
+        """Create the 12 catalog Tasks as Private Tasks in a configured private root.
+
+        Each gets its Track, Trap and task-specific Criteria, with a placeholder
+        input, Gold Answer, Manual Time and Canonical Prompt. Refuses, writing
+        nothing, if any catalog Task already exists or its Track is not configured;
+        should a Task still fail to scaffold, the ones already written are removed.
+        """
+        root = self._private_root(private_root)
+        unknown = sorted({e.track for e in CATALOG} - set(self.settings.tracks))
+        if unknown:
+            raise TaskAuthoringError(
+                f"catalog Tracks missing from {SETTINGS_FILE}: {', '.join(unknown)}"
+            )
+        clashes = [
+            entry.id
+            for entry in CATALOG
+            if find_by_id(self.tasks, entry.id) is not None
+            or (root.tasks_folder / entry.id).exists()
+        ]
+        if clashes:
+            raise TaskAuthoringError(
+                f"catalog Tasks already exist, not overwriting: {', '.join(clashes)}"
+            )
+        folder_existed = root.tasks_folder.exists()
+        created: list[Task] = []
+        try:
+            for entry in CATALOG:
+                created.append(
+                    self.create_task(entry.id, private_root=root.path, **entry.create_args())
+                )
+        except BaseException:
+            for task in created:
+                shutil.rmtree(task.folder)
+            if not folder_existed:
+                shutil.rmtree(root.tasks_folder, ignore_errors=True)
+            self._reload_tasks()
+            raise
+        return tuple(created)
+
+    def _private_root(self, path: str | Path) -> TaskRoot:
+        resolved = (self.root / Path(path).expanduser()).resolve()
+        if resolved not in self.settings.private_roots:
+            configured = ", ".join(map(str, self.settings.private_roots)) or "none"
+            raise TaskAuthoringError(
+                f"{resolved} is not a configured private root (configured: {configured})"
+            )
+        return self.task_context.private_root(resolved)
+
+    def _reload_tasks(self) -> None:
+        self.tasks = load_tasks(self.task_context)
+
     def runnable_task(self, task_id: str) -> Task:
-        """The Task; TaskNotRunnable if its input, Gold Answer or Manual Time is a placeholder."""
+        """The Task; TaskNotRunnable if any of its input, Gold Answer, Manual Time or
+        Canonical Prompt is still a placeholder."""
         task = self.task(task_id)
         if task.placeholders:
             raise TaskNotRunnable(
@@ -113,8 +256,14 @@ class Workspace:
         return run.task_input(task_id)
 
     def resume_run(self, run_id: str) -> Run:
-        """Reopen a Run, such as one left half-finished; see Run.pending."""
-        return open_run(self.root, run_id, {c.id: c for c in self.candidates}, self.tasks)
+        """Reopen a Run, such as one left half-finished; see Run.pending.
+
+        A finished Run whose Tasks were bumped since loads them at the versions it used,
+        from their archives (ADR-0003); an unfinished one raises RunMismatch.
+        """
+        return open_run(
+            self.task_context, run_id, {c.id: c for c in self.candidates}, self.tasks
+        )
 
     def score(self, results: Iterable[TaskResult]) -> RunScore:
         """Score a Run's per-Task result records with this Workspace's weights and bands."""

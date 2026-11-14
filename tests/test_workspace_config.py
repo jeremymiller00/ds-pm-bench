@@ -205,33 +205,74 @@ def test_default_config_has_no_private_roots(workspace_dir: Path):
     assert Workspace.open(workspace_dir).settings.private_roots == ()
 
 
-def test_private_roots_resolve_relative_to_the_workspace(workspace_dir: Path, tmp_path: Path):
+def set_local(root: Path, text: str) -> None:
+    (root / "config" / "local.yaml").write_text(text)
+
+
+def test_private_roots_are_read_from_the_git_ignored_local_config(
+    workspace_dir: Path, tmp_path: Path
+):
     private = tmp_path / "bench-private"
     private.mkdir()
     absolute = tmp_path / "elsewhere"
     absolute.mkdir()
-    set_setting(workspace_dir, "private_roots", f"['../bench-private', '{absolute}']")
+    set_local(workspace_dir, f"private_roots: ['../bench-private', '{absolute}']\n")
 
     ws = Workspace.open(workspace_dir)
 
     assert ws.settings.private_roots == (private.resolve(), absolute.resolve())
 
 
-@pytest.mark.parametrize(
-    "value, field",
-    [
-        ("'../bench-private'", "private_roots"),
-        ("['../does-not-exist']", "private_roots[0]"),
-        ("[42]", "private_roots[0]"),
-    ],
-    ids=["not-a-list", "missing-directory", "not-a-path"],
-)
-def test_invalid_private_roots_fail_naming_the_field(
-    workspace_dir: Path, value: str, field: str
+def test_an_empty_local_config_means_no_private_roots(workspace_dir: Path):
+    set_local(workspace_dir, "# nothing machine-specific yet\n")
+
+    assert Workspace.open(workspace_dir).settings.private_roots == ()
+
+
+def test_private_roots_in_the_public_settings_are_refused(
+    workspace_dir: Path, tmp_path: Path
 ):
-    set_setting(workspace_dir, "private_roots", value)
+    (tmp_path / "bench-private").mkdir()
+    set_setting(workspace_dir, "private_roots", "['../bench-private']")
 
     with pytest.raises(ConfigError) as err:
         Workspace.open(workspace_dir)
 
-    assert (err.value.file, err.value.field) == ("config/settings.yaml", field)
+    assert (err.value.file, err.value.field) == ("config/settings.yaml", "private_roots")
+    assert "config/local.yaml" in err.value.message
+
+
+@pytest.mark.parametrize(
+    "text, field",
+    [
+        ("private_roots: '../bench-private'\n", "private_roots"),
+        ("private_roots: ['../does-not-exist']\n", "private_roots[0]"),
+        ("private_roots: [42]\n", "private_roots[0]"),
+        ("private_roots: []\nweights: {}\n", "weights"),
+        ("[unclosed\n", "(file)"),
+    ],
+    ids=["not-a-list", "missing-directory", "not-a-path", "unknown-key", "bad-yaml"],
+)
+def test_invalid_local_config_fails_naming_the_field(
+    workspace_dir: Path, text: str, field: str
+):
+    set_local(workspace_dir, text)
+
+    with pytest.raises(ConfigError) as err:
+        Workspace.open(workspace_dir)
+
+    assert (err.value.file, err.value.field) == ("config/local.yaml", field)
+
+
+@pytest.mark.parametrize("inside", [".", "private", "tasks/private"])
+def test_a_private_root_inside_the_public_workspace_is_refused(
+    workspace_dir: Path, inside: str
+):
+    (workspace_dir / inside).mkdir(parents=True, exist_ok=True)
+    set_local(workspace_dir, f"private_roots: ['{inside}']\n")
+
+    with pytest.raises(ConfigError) as err:
+        Workspace.open(workspace_dir)
+
+    assert (err.value.file, err.value.field) == ("config/local.yaml", "private_roots[0]")
+    assert "inside the public Workspace" in err.value.message

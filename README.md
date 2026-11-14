@@ -15,12 +15,34 @@ uv sync
 uv run pytest            # includes the golden Verdict fixtures, driven through the CLI
 uv run ruff check        # lint and import order; also runs as a pre-commit hook
 uv run bench --help
+uv run bench               # open the TUI (same as `bench tui`)
 ```
 
 Run every command from the benchmark repo root, or pass `--workspace DIR`. The
 workspace needs `config/`, Tasks under `tasks/` or `examples/`, and Candidates under
 `candidates/` with exactly one marked `baseline: true`. Each Task's `track` must be
 one of the `tracks` listed in `config/settings.yaml`.
+
+Private Tasks (ADR 0006) are read from private roots listed in `config/local.yaml`,
+which is git-ignored because the paths are machine-specific. Copy
+`config/local.example.yaml` to start; without it no Private Tasks load.
+`private_roots` in the public `config/settings.yaml` is refused.
+
+To start the 12 catalog Tasks (T1.1-T4.3) as Private Tasks in one of those roots:
+
+```sh
+bench scaffold-catalog --root ../ds-pm-bench-private
+```
+
+Each gets its Track, Trap and one or two task-specific Criteria; the input, Gold
+Answer, Manual Time and Canonical Prompt start as placeholders (`TODO`), so the
+harness will not Run a Task until all four are filled in. It refuses, writing
+nothing, if any catalog Task already exists.
+
+In the TUI's Tasks tab, `e` edits the highlighted Task and `n` scaffolds a new one
+(private only when a private root is configured); `ctrl+s` saves, `escape` cancels.
+Saving shows the Task's version, and whether the edit made a new one because a Run
+used the old (ADR 0003). Validation errors appear inline in the form.
 
 ### 1. Record a Run from results files
 
@@ -51,11 +73,15 @@ The Suite defaults to every Task the Candidate's Clearance allows. `--suite
 public_only` narrows a private Clearance; a Suite never exceeds the Clearance. A
 Candidate cleared for private Tasks when none are loaded (no `private_roots`) is
 refused unless you pass `--suite public_only`. Tasks still holding a placeholder
-(input, Gold Answer or Manual Time) are left out of the Suite and listed under
-`excluded` in the Run's `run.yaml`.
+(input, Gold Answer, Manual Time or Canonical Prompt) are left out of the Suite and
+listed under `excluded` in the Run's `run.yaml`.
 
-A Run resumes only while its Candidate (tool, version, adapter, settings) and Task
-versions are unchanged (ADR 0003).
+A Run resumes only while its Candidate (tool, version, adapter, settings) is
+unchanged (ADR 0003). Editing a Task a Run used makes a new version and first
+copies the used one into the Task's `versions/<n>/` folder (in the private root for
+a Private Task), so a finished Run still opens, scores and compares on the versions
+it used. An unfinished Run is refused once a Task it used has a new version: a Run
+must finish on the Task versions it started with.
 
 ### 2. Score a Run
 

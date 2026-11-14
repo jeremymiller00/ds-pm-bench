@@ -22,6 +22,11 @@ class Criterion:
     description: str
 
 
+def criterion_dict(criterion: Criterion) -> dict[str, str]:
+    """A Criterion as written in a rubric file: {id, name, description}."""
+    return {"id": criterion.id, "name": criterion.name, "description": criterion.description}
+
+
 @dataclass(frozen=True)
 class Rubric:
     criteria: tuple[Criterion, ...]

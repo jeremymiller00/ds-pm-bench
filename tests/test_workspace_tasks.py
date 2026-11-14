@@ -74,10 +74,7 @@ def test_public_task_loads_from_the_repo_tasks_folder(workspace_dir: Path):
 
 
 def configure_private_root(workspace_dir: Path, private: Path) -> None:
-    settings = workspace_dir / "config" / "settings.yaml"
-    settings.write_text(
-        settings.read_text().replace("private_roots: []", f"private_roots: ['{private}']")
-    )
+    (workspace_dir / "config" / "local.yaml").write_text(f"private_roots: ['{private}']\n")
 
 
 def test_tasks_from_a_private_root_are_private_and_public_ones_public(
@@ -231,8 +228,9 @@ def test_complete_task_is_runnable(workspace_dir: Path):
         (dict(gold="TODO: PM to write after sanitizing.\n"), "Gold Answer"),
         (dict(gold="   \n"), "Gold Answer"),
         (dict(manual_time="null"), "Manual Time"),
+        (dict(prompt="TODO: draft the Canonical Prompt."), "Canonical Prompt"),
     ],
-    ids=["todo-input", "todo-gold-with-note", "blank-gold", "untimed"],
+    ids=["todo-input", "todo-gold-with-note", "blank-gold", "untimed", "todo-prompt"],
 )
 def test_task_with_a_placeholder_loads_but_is_refused_for_running(
     workspace_dir: Path, tmp_path: Path, task_args: dict, missing: str
