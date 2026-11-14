@@ -35,6 +35,7 @@ from bench.core.results import TaskResult
 from bench.core.rubric import Rubric, load_rubric
 from bench.core.runs import (
     Run,
+    candidate_ids_used,
     check_clearance,
     check_gate,
     choose_suite,
@@ -55,6 +56,14 @@ from bench.core.tasks import (
     scaffold_task,
 )
 from bench.core.verdicts import Comparison, Verdict, compare, gate_verdict
+
+EDITABLE_CANDIDATE_FIELDS = ("adapter", "settings", "env_vars", "cost_per_task_usd")
+_NOT_EDITABLE = {
+    "tool": "a different tool is a different Candidate; create_candidate it",
+    "version": "a different version is a different Candidate; create_candidate it",
+    "baseline": "use mark_baseline",
+    "gate": "use record_gate",
+}
 
 
 @dataclass
@@ -317,17 +326,72 @@ class Workspace:
         none, and appends a reject Verdict to the Decision Log dated on (story 18).
         Invalid fields raise ConfigError naming the field and change nothing.
         """
-        candidate = self.candidate(candidate_id)
+        candidate = self._changeable(candidate_id)
         f = FieldReader(f"{CANDIDATES_FOLDER}/{candidate.id}.yaml")
         gate = gate_data(
             f, reviewer=reviewer, on=on, checklist=checklist, passed=passed,
             clearance=clearance,
         )
-        gated = self._write(candidate, gate=gate)
-        self._reload_candidates()
+        gated = self._change(candidate, {"gate": gate})
         if not gated.gate_passed:
             self.log_verdict(self.gate_verdict(gated.id), on=on)
-        return self.candidate(gated.id)
+        return gated
+
+    def update_candidate(self, candidate_id: str, **changes: Any) -> Candidate:
+        """Change a Candidate's adapter, settings, env_vars or cost_per_task_usd.
+
+        A Candidate a Run has used is frozen (ADR-0003), so the change is written as
+        its next revision, <tool>@<version>~<n>, which keeps the Gate and takes the
+        Baseline mark if the old one held it; the used file stays as it was. Otherwise
+        the change is made in place. A superseded revision, or a field naming a
+        different Candidate (tool, version) or set elsewhere (baseline, gate), raises
+        CandidateAuthoringError; invalid values raise ConfigError. Nothing is written.
+        """
+        for field_name in changes:
+            if field_name not in EDITABLE_CANDIDATE_FIELDS:
+                raise CandidateAuthoringError(
+                    f"cannot change {field_name}: {_NOT_EDITABLE.get(field_name, 'unknown')}"
+                )
+        candidate = self._changeable(candidate_id)
+        if "env_vars" in changes:
+            changes["env_vars"] = list(changes["env_vars"])
+        return self._change(candidate, changes)
+
+    @property
+    def current_candidates(self) -> tuple[Candidate, ...]:
+        """The latest revision of each Candidate, leaving out superseded ones."""
+        return tuple(c for c in self.candidates if self._superseding(c) is None)
+
+    def _superseding(self, candidate: Candidate) -> Candidate | None:
+        return max(
+            (c for c in self.candidates
+             if c.lineage == candidate.lineage and c.revision > candidate.revision),
+            key=lambda c: c.revision,
+            default=None,
+        )
+
+    def _changeable(self, candidate_id: str) -> Candidate:
+        candidate = self.candidate(candidate_id)
+        newer = self._superseding(candidate)
+        if newer is not None:
+            raise CandidateAuthoringError(
+                f"Candidate {candidate.id} is superseded by {newer.id}; change that instead"
+            )
+        return candidate
+
+    def _change(self, candidate: Candidate, changes: dict[str, Any]) -> Candidate:
+        """Write the change in place, or as the next revision if a Run used it."""
+        if candidate.id not in candidate_ids_used(self.root):
+            changed = self._write(candidate, **changes)
+        else:
+            revision_id = f"{candidate.lineage}~{candidate.revision + 1}"
+            data = candidate_data(candidate)
+            data.update(changes)
+            changed = write_candidate(self.root, revision_id, data)
+            if changed.baseline:
+                self._unmark_baselines_except(changed.id)
+        self._reload_candidates()
+        return self.candidate(changed.id)
 
     def _write(self, candidate: Candidate, **changes: Any) -> Candidate:
         data = candidate_data(candidate)

@@ -4,6 +4,7 @@ from pathlib import Path
 import pytest
 
 from bench import CandidateAuthoringError, ConfigError, Workspace
+from test_workspace_tasks import write_task
 
 DAY = datetime.date(2026, 11, 13)
 
@@ -185,3 +186,124 @@ def test_an_invalid_gate_names_the_field_and_changes_nothing(
     assert err.value.field == field
     assert Workspace.open(workspace_dir).candidate(c.id).gate is None
     assert ws.decision_log() == ()
+
+
+def gated(ws: Workspace, candidate_id: str, *, on=DAY, **checklist):
+    return ws.record_gate(
+        candidate_id,
+        reviewer="J. Reviewer",
+        on=on,
+        checklist={**CHECKLIST, **checklist},
+        passed=True,
+        clearance="public_only",
+    )
+
+
+@pytest.fixture
+def used(workspace_dir: Path):
+    """A gated Baseline that a Run has used, and the Run."""
+    write_task(workspace_dir, "T1.1")
+    ws = Workspace.open(workspace_dir)
+    c = gated(ws, new_candidate(ws).id)
+    run = ws.start_run(c.id, on=DAY)
+    return ws, c, run
+
+
+def test_an_unused_candidate_is_changed_in_place(workspace_dir: Path):
+    ws = Workspace.open(workspace_dir)
+    c = new_candidate(ws)
+
+    changed = ws.update_candidate(c.id, settings={"temperature": 0.7})
+
+    assert (changed.id, changed.revision) == (c.id, 1)
+    assert changed.settings == {"temperature": 0.7}
+    assert [x.id for x in Workspace.open(workspace_dir).candidates] == [c.id]
+
+
+def test_changing_a_used_candidate_makes_a_new_revision(workspace_dir: Path, used):
+    ws, c, run = used
+    before = (workspace_dir / "candidates" / f"{c.id}.yaml").read_text()
+
+    changed = ws.update_candidate(c.id, settings={"temperature": 0.7})
+
+    assert (changed.id, changed.revision, changed.lineage) == (f"{c.id}~2", 2, c.id)
+    assert changed.settings == {"temperature": 0.7}
+    assert (changed.tool, changed.version) == (c.tool, c.version)
+    assert changed.gate == c.gate
+    assert (workspace_dir / "candidates" / f"{c.id}.yaml").read_text().replace(
+        "baseline: true", "baseline: false"
+    ) == before.replace("baseline: true", "baseline: false")
+    assert ws.candidate(c.id).settings == {"temperature": 0.2}
+    assert ws.resume_run(run.id).candidate.id == c.id
+
+
+def test_a_new_revision_of_the_baseline_takes_the_baseline_mark(used):
+    ws, c, _ = used
+
+    changed = ws.update_candidate(c.id, env_vars=["OTHER_KEY"])
+
+    assert ws.baseline.id == changed.id
+    assert not ws.candidate(c.id).baseline
+
+
+def test_regating_a_used_candidate_makes_a_new_revision(workspace_dir: Path, used):
+    ws, c, run = used
+
+    regated = ws.record_gate(
+        c.id, reviewer="A. Nother", on=DAY, checklist=CHECKLIST, passed=False,
+        clearance=None,
+    )
+
+    assert regated.id == f"{c.id}~2" and regated.gate.result == "fail"
+    assert ws.candidate(c.id).gate_passed
+    assert ws.resume_run(run.id).candidate.gate_passed
+    assert [e["candidate"]["id"] for e in ws.decision_log()] == [regated.id]
+
+
+def test_revisions_number_on_from_the_highest(used):
+    ws, c, _ = used
+    second = ws.update_candidate(c.id, settings={"temperature": 0.7})
+    ws.start_run(second.id, on=DAY + datetime.timedelta(days=1))
+
+    third = ws.update_candidate(second.id, settings={"temperature": 0.9})
+
+    assert third.id == f"{c.id}~3"
+    assert [x.id for x in ws.current_candidates] == [third.id]
+
+
+def test_a_superseded_revision_cannot_be_changed(used):
+    ws, c, _ = used
+    newer = ws.update_candidate(c.id, settings={"temperature": 0.7})
+
+    with pytest.raises(CandidateAuthoringError, match=f"superseded by {newer.id}"):
+        ws.update_candidate(c.id, settings={"temperature": 0.9})
+    with pytest.raises(CandidateAuthoringError, match="superseded"):
+        gated(ws, c.id)
+
+
+@pytest.mark.parametrize("field", ["tool", "version", "baseline", "gate", "id"])
+def test_fields_that_name_a_different_candidate_cannot_be_changed(
+    workspace_dir: Path, field: str
+):
+    ws = Workspace.open(workspace_dir)
+    c = new_candidate(ws)
+
+    with pytest.raises(CandidateAuthoringError, match=field):
+        ws.update_candidate(c.id, **{field: "x"})
+
+
+def test_a_manual_assisted_candidate_records_its_flat_cost_per_task(workspace_dir: Path):
+    ws = Workspace.open(workspace_dir)
+    new_candidate(ws)
+    manual = new_candidate(
+        ws, tool="Chat UI", version="2026-11", adapter="manual_assisted",
+        env_vars=[], cost_per_task_usd=0.25, baseline=False,
+    )
+    unpriced = new_candidate(
+        ws, tool="Other", version="1", adapter="manual_assisted", baseline=False
+    )
+
+    assert manual.id == "chat-ui@2026-11"
+    assert Workspace.open(workspace_dir).candidate(manual.id).task_cost_usd == 0.25
+    assert unpriced.task_cost_usd is None
+    assert ws.candidate("claude@claude-opus-5-5").task_cost_usd is None

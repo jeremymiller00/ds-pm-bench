@@ -48,7 +48,7 @@ GATE_FIELDS = (
 )
 
 # A revision after the first: <tool>@<version>~<n>, n >= 2.
-_REVISION = re.compile(r"^(?P<lineage>.+)~(?P<n>[1-9][0-9]*)$")
+_REVISION = re.compile(r"^(?P<lineage>.+)~(?P<n>[2-9]|[1-9][0-9]+)$")
 _ID_UNSAFE = re.compile(r"[^a-z0-9._-]+")
 _ENV_VAR = re.compile(r"^[A-Z][A-Z0-9_]*$")
 # Settings keys that would hold a secret value; these belong in env_vars instead.
