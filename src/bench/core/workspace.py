@@ -36,7 +36,7 @@ from bench.core.runs import (
     tasks_in,
 )
 from bench.core.scoring import RunScore, score_run
-from bench.core.sessions import ManualSession
+from bench.core.sessions import ManualSession, ManualTimeStopwatch
 from bench.core.settings import SETTINGS_FILE, Settings, load_settings
 from bench.core.tasks import (
     CriterionSpec,
@@ -167,6 +167,12 @@ class Workspace:
         """Record how long a person takes on the Task by hand, for the Time-saved
         Dimension; an edit like any other (update_task)."""
         return self.update_task(task_id, manual_time_minutes=minutes)
+
+    def begin_manual_time(self, task_id: str) -> ManualTimeStopwatch:
+        """Start a stopwatch on a person doing the Task by hand; its finish records the
+        Manual Time (record_manual_time)."""
+        self.task(task_id)
+        return ManualTimeStopwatch(task_id, self.clock, self.record_manual_time)
 
     def scaffold_catalog(self, private_root: str | Path) -> tuple[Task, ...]:
         """Create the 12 catalog Tasks as Private Tasks in a configured private root.

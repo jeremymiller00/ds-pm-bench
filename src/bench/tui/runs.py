@@ -12,12 +12,13 @@ from textual import on
 from textual.app import ComposeResult, SuspendNotSupported
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
-from textual.screen import Screen
+from textual.screen import ModalScreen, Screen
 from textual.widgets import Button, Footer, Label, OptionList, Select, Static, TextArea
 from textual.widgets.option_list import Option
 
 from bench.core.errors import (
     ClearanceError,
+    ConfigError,
     GateNotPassed,
     RunExists,
     RunMismatch,
@@ -26,7 +27,8 @@ from bench.core.errors import (
 )
 from bench.core.kinds import Clearance, Suite
 from bench.core.runs import OutputRecord, Run
-from bench.core.sessions import ManualSession
+from bench.core.sessions import ManualSession, ManualTimeStopwatch
+from bench.core.tasks import Task
 from bench.core.workspace import Workspace
 
 # What the Workspace refuses when starting or resuming a Run, shown inline.
@@ -45,7 +47,7 @@ class RunsPane(Vertical):
     DEFAULT_CSS = """
     RunsPane #run-controls, RunsPane #run-resume-controls { height: auto; }
     RunsPane Select { width: 1fr; }
-    RunsPane #run-tasks { height: auto; max-height: 12; }
+    RunsPane OptionList { height: auto; max-height: 12; }
     RunsPane #run-status { height: auto; padding: 0 1; }
     """
 
@@ -75,7 +77,37 @@ class RunsPane(Vertical):
         yield Static("No Run open.", id="run-progress", markup=False)
         yield Label("Pending Tasks (enter to work one)")
         yield OptionList(id="run-tasks")
+        yield Label("Tasks with Manual Time still a placeholder (enter to time one by hand)")
+        yield OptionList(id="manual-time-tasks")
         yield Static("", id="run-status", markup=False)
+
+    def on_mount(self) -> None:
+        self._show_untimed()
+
+    def _show_untimed(self) -> None:
+        untimed = self.query_one("#manual-time-tasks", OptionList)
+        untimed.clear_options()
+        untimed.add_options(
+            Option(t.id, id=t.id) for t in self.workspace.tasks if t.manual_time_minutes is None
+        )
+
+    @on(OptionList.OptionSelected, "#manual-time-tasks")
+    def _time_task(self, event: OptionList.OptionSelected) -> None:
+        if event.option.id is None:
+            return
+        stopwatch = self.workspace.begin_manual_time(event.option.id)
+
+        def recorded(task: Task | None) -> None:
+            if task is None:
+                self._status(f"{stopwatch.task_id}: timing cancelled; nothing recorded.")
+                return
+            self._show_untimed()
+            self._status(
+                f"{task.id} Manual Time recorded: {task.manual_time_minutes:g} minutes "
+                f"(v{task.version}). A Run started from now on can include it."
+            )
+
+        self.app.push_screen(ManualTimeScreen(stopwatch), recorded)
 
     @on(Select.Changed, "#run-candidate")
     def _offer_suites(self, event: Select.Changed) -> None:
@@ -286,6 +318,55 @@ EDITOR_NOTE = (
     "e opens the draft in $EDITOR; the app suspends and all the time it is open counts "
     "as active time."
 )
+class ManualTimeScreen(ModalScreen[Task | None]):
+    """A stopwatch on a person doing a Task by hand; ctrl+s stops it and records the
+    Manual Time, escape cancels. Dismisses with the updated Task, or None."""
+
+    DEFAULT_CSS = """
+    ManualTimeScreen #stopwatch { width: 60; height: auto; border: thick $accent;
+        background: $surface; padding: 0 1; }
+    ManualTimeScreen #stopwatch-error { color: $error; }
+    """
+    BINDINGS = [
+        Binding("ctrl+s", "save", "Stop and save", priority=True),
+        Binding("escape", "cancel", "Cancel"),
+    ]
+
+    def __init__(self, stopwatch: ManualTimeStopwatch) -> None:
+        super().__init__()
+        self.stopwatch = stopwatch
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="stopwatch"):
+            yield Static(
+                f"Timing {self.stopwatch.task_id} by hand. Do the Task without the "
+                "Candidate, then ctrl+s to stop and record its Manual Time; escape cancels.",
+                markup=False,
+            )
+            yield Static("", id="stopwatch-timer", markup=False)
+            yield Static("", id="stopwatch-error", markup=False)
+
+    def on_mount(self) -> None:
+        self.refresh_timer()
+        self.set_interval(1, self.refresh_timer)
+
+    def refresh_timer(self) -> None:
+        self.query_one("#stopwatch-timer", Static).update(
+            f"Elapsed {clock_time(self.stopwatch.elapsed_seconds)}"
+        )
+
+    def action_save(self) -> None:
+        try:
+            task = self.stopwatch.finish()
+        except ConfigError as exc:
+            self.query_one("#stopwatch-error", Static).update(str(exc))
+            return
+        self.dismiss(task)
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+
 PASTE_HELP = (
     "The timer is running. Copy the prompt (escape, then c) into the Candidate, paste "
     "its raw Output below and press ctrl+s. Then edit here or in $EDITOR: "

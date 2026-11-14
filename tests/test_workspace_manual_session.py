@@ -270,3 +270,18 @@ def test_manual_time_is_recorded_on_the_task(ws_dir: Path, clock: FakeClock):
 
     assert task.manual_time_minutes == 38.5
     assert Workspace.open(ws_dir).task("T2.1").placeholders == ()
+
+
+def test_a_manual_time_stopwatch_records_the_minutes_it_ran(
+    workspace_dir: Path, clock: FakeClock
+):
+    write_task(workspace_dir, "T1.1", manual_time="null")
+    ws = open_ws(workspace_dir, clock)
+
+    stopwatch = ws.begin_manual_time("T1.1")
+    clock.advance(25 * 60 + 33)
+    assert stopwatch.elapsed_seconds == 1533
+    task = stopwatch.finish()
+
+    assert task.manual_time_minutes == 25.6
+    assert Workspace.open(workspace_dir).task("T1.1").manual_time_minutes == 25.6

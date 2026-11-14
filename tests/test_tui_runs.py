@@ -13,7 +13,7 @@ from textual.widgets import OptionList, Select, Static, TextArea
 
 from bench import Workspace
 from bench.tui.app import BenchApp
-from bench.tui.runs import ManualTaskScreen
+from bench.tui.runs import ManualTaskScreen, ManualTimeScreen
 from test_tui import configure_private_root, write_task
 from test_workspace_candidates import candidate, write_candidate
 from test_workspace_manual_session import FakeClock, FakeEditor
@@ -242,3 +242,35 @@ async def test_a_half_finished_run_resumes_with_its_progress(
 
     assert f"Run {run_id} (public_only): 1/2 Tasks recorded" in progress
     assert pending_ids == [EXAMPLE]
+
+
+async def test_a_placeholder_manual_time_is_timed_with_a_stopwatch(
+    ws_dir: Path, clock: FakeClock
+):
+    write_task(ws_dir, "T2.1", track="Specs", manual_time="null")
+    app = BenchApp(Workspace.open(ws_dir, clock=clock))
+    async with app.run_test() as pilot:
+        await open_runs(app, pilot)
+        untimed = app.query_one("#manual-time-tasks", OptionList)
+        assert [untimed.get_option_at_index(i).id for i in range(untimed.option_count)] == [
+            "T2.1"
+        ]
+        untimed.focus()
+        untimed.highlighted = 0
+        await pilot.press("enter")
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, ManualTimeScreen)
+
+        clock.advance(25 * 60 + 30)
+        screen.refresh_timer()
+        assert "25:30" in text(app, "#stopwatch-timer")
+        await pilot.press("ctrl+s")
+        await pilot.pause()
+        assert not isinstance(app.screen, ManualTimeScreen)
+        status = text(app, "#run-status")
+        left = app.query_one("#manual-time-tasks", OptionList).option_count
+
+    assert "T2.1 Manual Time recorded: 25.5 minutes" in status
+    assert left == 0
+    assert Workspace.open(ws_dir).task("T2.1").manual_time_minutes == 25.5
