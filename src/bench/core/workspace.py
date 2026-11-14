@@ -24,17 +24,32 @@ from bench.core.candidates import (
     write_candidate,
 )
 from bench.core.catalog import CATALOG
-from bench.core.decisions import log_verdict, read_log
+from bench.core.decisions import log_override, log_verdict, read_log
 from bench.core.errors import (
     AttemptError,
     CandidateAuthoringError,
+    ClearanceError,
     GateNotPassed,
+    JudgeNotCertified,
+    JudgeRefused,
+    JudgeUnavailable,
     TaskAuthoringError,
     TaskNotRunnable,
     UnknownCandidateError,
     UnknownTaskError,
 )
-from bench.core.kinds import AdapterKind, Clearance, Suite
+from bench.core.judging import (
+    JUDGE_FILE,
+    JudgeModels,
+    JudgeRequest,
+    JudgeSetup,
+    TaskJudging,
+    is_candidate_under_test,
+    load_judge_setup,
+    parse_reply,
+    same_family,
+)
+from bench.core.kinds import AdapterKind, Clearance, Suite, Visibility
 from bench.core.lookup import find_by_id
 from bench.core.manual_time import ManualTimeStopwatch
 from bench.core.prices import PriceTable, load_prices
@@ -72,7 +87,8 @@ class Workspace:
     """Opened from the repo root holding config/, Tasks, Candidates and Runs.
 
     tasks is replaced when a Task is created or edited, candidates when a Candidate is.
-    clock and editor are the Adapters for timing and $EDITOR; tests inject fakes.
+    clock and editor are the Adapters for timing and $EDITOR, judges the one that
+    gives the JudgeModel for each model of the Judge Setup; tests inject fakes.
     """
 
     root: Path
@@ -83,10 +99,17 @@ class Workspace:
     candidates: tuple[Candidate, ...]
     clock: Clock
     editor: Editor
+    judge_setup: JudgeSetup | None  # config/judge.yaml; None when absent
+    judges: JudgeModels | None  # the JudgeModel for each judge model; None, no judging
 
     @classmethod
     def open(
-        cls, path: str | Path, *, clock: Clock | None = None, editor: Editor | None = None
+        cls,
+        path: str | Path,
+        *,
+        clock: Clock | None = None,
+        editor: Editor | None = None,
+        judges: JudgeModels | None = None,
     ) -> Workspace:
         root = Path(path).resolve()
         settings = load_settings(root)
@@ -101,6 +124,8 @@ class Workspace:
             candidates=load_candidates(root),
             clock=clock or SystemClock(),
             editor=editor or ExternalEditor(),
+            judge_setup=load_judge_setup(root),
+            judges=judges,
         )
 
     @property
@@ -500,6 +525,75 @@ class Workspace:
             check_clearance(candidate, self.task(task_id))
 
         return Attempt(run, task_id, prompt, self.clock, self.editor, check_permitted)
+
+    def judge_run(self, run: Run, *, allow_uncertified: bool = False) -> tuple[TaskJudging, ...]:
+        """Score every Task of the Run whose Output is recorded but not yet scored.
+
+        Each Judge sees the input, the Rubric, the Gold Answer and the final Output,
+        never the Candidate. A panel's median per Criterion becomes the Criterion
+        scores; every Judge's scores and reasons are saved (Run.record_judging).
+
+        Refused before any Judge is called: no Judge Setup or judge models
+        (JudgeUnavailable); an uncertified Judge Setup without allow_uncertified
+        (JudgeNotCertified; certification arrives in slice 5); a Judge that is the
+        Candidate under test (JudgeRefused); a Private Task to a Judge Setup without
+        private Clearance (ClearanceError). Each allowed override is appended to the
+        Decision Log. A malformed reply raises JudgeReplyError; Tasks judged before
+        it stay recorded, so judging again resumes. A same-family Judge marks every
+        Task for a full human check.
+        """
+        setup = self.judge_setup
+        if setup is None:
+            raise JudgeUnavailable(f"no Judge Setup: {JUDGE_FILE} is missing")
+        if self.judges is None:
+            raise JudgeUnavailable("no judge models were given to the Workspace")
+        if not allow_uncertified:
+            raise JudgeNotCertified(
+                f"Judge Setup {setup.hash} is not certified; pass allow_uncertified=True "
+                "to judge anyway, which is logged to the Decision Log"
+            )
+        candidate = run.candidate
+        for spec in setup.models:
+            if is_candidate_under_test(spec, candidate.tool, candidate.version):
+                raise JudgeRefused(
+                    f"Judge {spec.label} is the Candidate under test ({candidate.id}); "
+                    "a model never grades itself"
+                )
+        tasks = [run.task(task_id) for task_id in run.unjudged]
+        for task in tasks:  # before any content is read
+            if task.visibility == Visibility.PRIVATE and (
+                setup.clearance != Clearance.PUBLIC_AND_PRIVATE
+            ):
+                raise ClearanceError(
+                    f"Task {task.id} is private and Judge Setup {setup.hash} is cleared "
+                    f"for {setup.clearance}"
+                )
+        log_override(self.root, self.clock.today(), run.id, candidate.id, setup.hash)
+        family = any(same_family(spec, candidate.tool) for spec in setup.models)
+        models = {spec.label: self.judges(spec) for spec in setup.models}
+        judged = []
+        for task in tasks:
+            request = JudgeRequest(
+                prompt=setup.prompt,
+                input=f"{task.canonical_prompt}\n\n{task.input_path.read_text().strip()}",
+                criteria=task.rubric.criteria,
+                gold_answer=task.gold_answer_path.read_text(),
+                output=run.final_output(task.id),
+            )
+            judging = TaskJudging(
+                task_id=task.id,
+                judges={
+                    label: parse_reply(
+                        model.judge(request), request.criteria,
+                        f"Judge {label} on Task {task.id}",
+                    )
+                    for label, model in models.items()
+                },
+                same_family=family,
+            )
+            run.record_judging(judging, setup)
+            judged.append(judging)
+        return tuple(judged)
 
     def run_ids(self) -> tuple[str, ...]:
         """The id of every Run under runs/, newest first, for choosing one to resume."""

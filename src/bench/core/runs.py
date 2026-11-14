@@ -7,6 +7,9 @@ runs/<date>-<candidate>/ in the public repo holds:
                         scores, Spot-check human scores), with the Task's visibility
   raw/<task>.md         raw Output       } Public Tasks only; for a Private Task these
   final/<task>.md       edited final     } go under <private root>/runs/<run id>/
+  judge/<task>.yaml     Judge reasons    }
+
+run.yaml also gains judge_setup (hash, mode, models) when the Run is first judged.
 """
 
 from __future__ import annotations
@@ -23,6 +26,7 @@ from bench.core.candidates import Candidate
 from bench.core.errors import (
     ClearanceError,
     GateNotPassed,
+    JudgeSetupMismatch,
     RunExists,
     RunIncomplete,
     RunMismatch,
@@ -31,6 +35,7 @@ from bench.core.errors import (
     UnknownTaskError,
 )
 from bench.core.fields import FieldReader
+from bench.core.judging import JudgeSetup, TaskJudging
 from bench.core.kinds import Clearance, Suite, Visibility
 from bench.core.lookup import find_by_id
 from bench.core.results import TaskResult
@@ -40,6 +45,7 @@ from bench.core.tasks import Task, TaskContext, load_version
 RUNS_FOLDER = "runs"
 RUN_FILE = "run.yaml"
 RESULTS_FOLDER = "results"
+JUDGE_FOLDER = "judge"
 
 # What a results file (the input to record_from_file) may hold.
 RESULTS_FILE_FIELDS = (
@@ -154,6 +160,85 @@ class Run:
             check_criterion_score(value, f"Task {task.id}: {cid}")
         task_record["criterion_scores"] = dict(scores)
         self._write_task_record(task.id, task_record)
+
+    @property
+    def judge_setup_hash(self) -> str | None:
+        """The hash of the Judge Setup that scored this Run; None until it is judged."""
+        return (self._snapshot().get("judge_setup") or {}).get("hash")
+
+    @property
+    def unjudged(self) -> tuple[str, ...]:
+        """Task ids whose Output is recorded but not yet scored, in Suite order."""
+        return tuple(
+            t.id for t in self.tasks
+            if (r := self._task_record(t.id)) is not None and "criterion_scores" not in r
+        )
+
+    def final_output(self, task_id: str) -> str:
+        """The edited final Output of a Task whose Output is recorded."""
+        task = self.task(task_id)
+        return (self.content_folder(task) / "final" / f"{task.id}.md").read_text()
+
+    def record_judging(self, judging: TaskJudging, setup: JudgeSetup) -> None:
+        """Save a Judge Setup's scoring of a Task: the median per Criterion as its
+        Criterion scores, and every Judge's scores. Reasons go beside the Outputs, so a
+        Private Task's stay in its private root (ADR-0006).
+
+        A Run is scored by one Judge Setup: the first records its hash in run.yaml and
+        any other is refused (JudgeSetupMismatch).
+        """
+        snapshot = self._snapshot()
+        recorded = snapshot.get("judge_setup")
+        if recorded is not None and recorded["hash"] != setup.hash:
+            raise JudgeSetupMismatch(
+                f"Run {self.id} was judged by Judge Setup {recorded['hash']}, not "
+                f"{setup.hash}; a Run is scored by one Judge Setup"
+            )
+        task = self.task(judging.task_id)
+        self.record_criterion_scores(task.id, judging.scores)
+        if recorded is None:
+            snapshot["judge_setup"] = setup.snapshot()
+            self._write_snapshot(snapshot)
+        task_record = self._task_record(task.id)
+        task_record["judge"] = {
+            "setup": setup.hash,
+            "scores": {
+                label: {cid: j.score for cid, j in scores.items()}
+                for label, scores in judging.judges.items()
+            },
+            "disagreements": list(judging.disagreements),
+            "same_family": judging.same_family,
+            "full_human_check": judging.full_human_check,
+        }
+        self._write_task_record(task.id, task_record)
+        folder = self.content_folder(task) / JUDGE_FOLDER
+        folder.mkdir(parents=True, exist_ok=True)
+        reasons = {
+            label: {cid: {"score": j.score, "reason": j.reason} for cid, j in scores.items()}
+            for label, scores in judging.judges.items()
+        }
+        (folder / f"{task.id}.yaml").write_text(yaml.safe_dump(reasons, sort_keys=False))
+
+    @property
+    def full_human_checks(self) -> tuple[str, ...]:
+        """Task ids the Judge marked for a full human check: a same-family Judge or a
+        panel disagreement."""
+        return tuple(
+            t.id for t in self.tasks
+            if ((self._task_record(t.id) or {}).get("judge") or {}).get("full_human_check")
+        )
+
+    def judge_reasons(self, task_id: str) -> dict[str, Any]:
+        """Each Judge's score and reason per Criterion: label -> Criterion -> both."""
+        task = self.task(task_id)
+        path = self.content_folder(task) / JUDGE_FOLDER / f"{task.id}.yaml"
+        return yaml.safe_load(path.read_text()) if path.is_file() else {}
+
+    def _snapshot(self) -> dict[str, Any]:
+        return yaml.safe_load((self.folder / RUN_FILE).read_text())
+
+    def _write_snapshot(self, snapshot: dict[str, Any]) -> None:
+        (self.folder / RUN_FILE).write_text(yaml.safe_dump(snapshot, sort_keys=False))
 
     def record_from_file(self, path: Path) -> None:
         """Record one Task's Output, and its Criterion scores if present, from a results file.
