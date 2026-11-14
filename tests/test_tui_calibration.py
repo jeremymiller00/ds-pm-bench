@@ -4,6 +4,7 @@ run the Judge on it and certify the Judge Setup.
 Fake judges stand in for every model call; Runs are recorded through the Workspace.
 """
 
+import datetime
 from pathlib import Path
 
 import pytest
@@ -12,9 +13,11 @@ from textual.widgets import Input, OptionList, Select, Static
 from bench import Workspace
 from bench.tui.app import BenchApp
 from bench.tui.calibration import CalibrationScoreScreen
+from bench.tui.runs import JudgeScreen
 from test_workspace_candidates import candidate, write_candidate
 from test_workspace_judging import (
     CANDIDATE,
+    DAY,
     OUTPUT,
     FakeJudge,
     FakeJudges,
@@ -145,3 +148,60 @@ async def test_a_bad_score_is_refused_on_the_scoring_screen(ws_dir: Path):
 
     assert still_open and error
     assert not ws.calibration_items()[0].human_scored
+
+
+def certify(ws: Workspace, run_id: str) -> None:
+    item = ws.add_calibration_item(run_id, "T1.1")
+    ws.score_calibration_item(item.id, {c: 4 for c in item.criteria})
+    ws.judge_calibration_set()
+    ws.certify_judge(on=DAY)
+
+
+async def open_judge_screen(app: BenchApp, pilot, run_id: str) -> JudgeScreen:
+    await pilot.click("#--content-tab-runs")
+    await pilot.pause()
+    app.query_one("#run-existing", Select).value = run_id
+    await pilot.pause()
+    await pilot.click("#run-resume")
+    await pilot.pause()
+    await pilot.click("#run-judge")
+    await pilot.pause()
+    assert isinstance(app.screen, JudgeScreen)
+    return app.screen
+
+
+async def test_a_certified_judge_setup_judges_a_run_with_no_override(ws_dir: Path):
+    ws = Workspace.open(ws_dir, judges=FakeJudges(**{JUDGE: FakeJudge(score=4)}))
+    certify(ws, recorded_run(ws).id)
+    run = ws.start_run(CANDIDATE, on=DAY + datetime.timedelta(days=1))
+    run.record_output("T1.1", raw="draft", final=OUTPUT, active_seconds=60,
+                      latency_seconds=5, cost_usd=None)
+    app = BenchApp(ws)
+    async with app.run_test(size=(120, 60)) as pilot:
+        screen = await open_judge_screen(app, pilot, run.id)
+        assert not screen.query("#judge-override")
+        notice = text(app, "#judge-certification")
+        await pilot.click("#judge-run")
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+        shown = text(app, "#judge-results")
+
+    assert "certified" in notice and "not certified" not in notice
+    assert "override" not in shown
+    assert ws.resume_run(run.id).unjudged == ()
+    assert [e["kind"] for e in ws.decision_log()] == ["judge_certification"]
+
+
+async def test_the_decision_log_labels_a_certification_with_its_hash(ws_dir: Path):
+    ws = Workspace.open(ws_dir, judges=FakeJudges(**{JUDGE: FakeJudge(score=4)}))
+    certify(ws, recorded_run(ws).id)
+    app = BenchApp(ws)
+    async with app.run_test(size=(120, 60)) as pilot:
+        await pilot.click("#--content-tab-decision-log")
+        await pilot.pause()
+        entries = app.query_one("#log-entries", OptionList)
+        label = str(entries.get_option_at_index(0).prompt)
+
+    assert ws.judge_setup.hash in label
+    assert "certified" in label and "100% within 1 point" in label
+    assert "?" not in label

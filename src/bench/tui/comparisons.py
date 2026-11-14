@@ -210,7 +210,18 @@ def entry_label(entry: dict[str, Any]) -> str:
         return f"{date}  Verdict {entry.get('label')}: {candidate} vs Baseline {baseline}"
     if kind == "uncertified_judge_override":
         return f"{date}  uncertified Judge override: Run {entry.get('run')}"
+    if kind == "judge_certification":
+        return (
+            f"{date}  Judge Setup {entry.get('judge_setup_hash')} certified: "
+            f"{agreement_text(entry.get('within_one_point'), entry.get('weighted_kappa'))}"
+        )
     return f"{date}  {kind.replace('_', ' ')}: {candidate}"
+
+
+def agreement_text(within_one_point: float | None, weighted_kappa: float | None) -> str:
+    within = "?" if within_one_point is None else f"{within_one_point:.0%}"
+    kappa = "n/a" if weighted_kappa is None else f"{weighted_kappa:.2f}"
+    return f"{within} within 1 point, weighted kappa {kappa}"
 
 
 def scorecard(comparison: Comparison, weights: dict[str, float]) -> str:
