@@ -15,7 +15,6 @@ from bench.core.attempts import Attempt
 from bench.core.automated import ReturnedOutput
 from bench.core.calibration import (
     Agreement,
-    BlindCalibrationItem,
     CalibrationItem,
     CriterionAgreement,
 )
@@ -54,6 +53,7 @@ from bench.core.errors import (
     UnknownTaskError,
 )
 from bench.core.judging import (
+    BlindOutput,
     JudgeModelSpec,
     JudgeRequest,
     JudgeSetup,
@@ -69,7 +69,7 @@ __all__ = [
     "Agreement",
     "Attempt",
     "AttemptError",
-    "BlindCalibrationItem",
+    "BlindOutput",
     "CalibrationError",
     "CalibrationItem",
     "CandidateAdapter",

@@ -195,7 +195,7 @@ def test_the_judge_scores_the_calibration_set_blind_to_the_human(ws_dir: Path):
 
     judged = ws.judge_calibration_set()
 
-    assert [j.task_id for j in judged] == item_ids
+    assert [j.output_id for j in judged] == item_ids
     judge = judges.by_label["openai/gpt-6"]
     assert judge.requests[0].output == "output 0"
     assert CANDIDATE not in judge.requests[0].render()
@@ -246,9 +246,9 @@ def test_a_private_item_is_refused_to_a_judge_without_private_clearance(private_
     write_judge_setup(ws_dir, clearance="public_and_private")
     ws = Workspace.open(ws_dir, judges=judges)
     [judging] = ws.judge_calibration_set()
-    reasons = (private / "calibration" / "judge" / f"{judging.task_id}.yaml").read_text()
+    reasons = (private / "calibration" / "judge" / f"{judging.output_id}.yaml").read_text()
     assert "ok." in reasons
-    assert "ok." not in (ws_dir / "calibration" / f"{judging.task_id}.yaml").read_text()
+    assert "ok." not in (ws_dir / "calibration" / f"{judging.output_id}.yaml").read_text()
 
 
 AGREEING = [{"clarity": s, "correctness": s} for s in (1, 2, 3, 4, 5)]

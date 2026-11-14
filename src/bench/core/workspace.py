@@ -21,12 +21,7 @@ from bench.core.adapters import (
 )
 from bench.core.attempts import Attempt
 from bench.core.automated import ReturnedOutput, load_returned, run_task
-from bench.core.calibration import (
-    Agreement,
-    BlindCalibrationItem,
-    CalibrationItem,
-    CalibrationSet,
-)
+from bench.core.calibration import Agreement, CalibrationItem, CalibrationSet
 from bench.core.candidates import (
     CANDIDATES_FOLDER,
     Candidate,
@@ -56,7 +51,6 @@ from bench.core.errors import (
     CandidateUnavailable,
     CertificationFailed,
     GateNotPassed,
-    JudgeClearanceError,
     JudgeNotCertified,
     JudgeRefused,
     JudgeUnavailable,
@@ -69,17 +63,20 @@ from bench.core.errors import (
 )
 from bench.core.judging import (
     JUDGE_FILE,
+    BlindOutput,
     JudgeModelSpec,
     JudgeRequest,
     JudgeSetup,
     TaskJudging,
+    blind_output,
+    check_judge_clearance,
     edit_judge_setup,
     is_candidate_under_test,
     load_judge_setup,
     parse_reply,
     same_family,
 )
-from bench.core.kinds import AdapterKind, Clearance, Suite, Visibility
+from bench.core.kinds import AdapterKind, Clearance, Suite
 from bench.core.lookup import find_by_id
 from bench.core.manual_time import ManualTimeStopwatch
 from bench.core.prices import PriceTable, load_prices, remove_price, set_price
@@ -673,25 +670,13 @@ class Workspace:
                 )
         tasks = [run.task(task_id) for task_id in run.unjudged]
         for task in tasks:  # before any content is read
-            if task.visibility == Visibility.PRIVATE and (
-                setup.clearance != Clearance.PUBLIC_AND_PRIVATE
-            ):
-                raise JudgeClearanceError(
-                    f"Task {task.id} is private and Judge Setup {setup.hash} is cleared "
-                    f"for {setup.clearance}"
-                )
+            check_judge_clearance(setup, task.visibility, f"Task {task.id}")
         models = {spec.label: self._judge_model(spec) for spec in setup.models}
         family = any(same_family(spec, candidate.tool) for spec in setup.models)
         judged = []
         for task in tasks:
-            request = JudgeRequest(
-                prompt=setup.prompt,
-                input=f"{task.canonical_prompt}\n\n{task.input_path.read_text().strip()}",
-                criteria=task.rubric.criteria,
-                gold_answer=task.gold_answer_path.read_text(),
-                output=run.final_output(task.id),
-            )
-            judging = _judging(task.id, request, models, same_family=family,
+            blind = blind_output(task.id, task, run.final_output(task.id))
+            judging = _judging(blind, setup, models, same_family=family,
                                where=f"Task {task.id}")
             run.record_judging(judging, setup)
             if not is_certified and not override_logged(self.root, run.id, setup.hash):
@@ -712,19 +697,15 @@ class Workspace:
             full_checks=run.full_human_checks,
         ))
 
-    def spot_check_item(self, run: Run, task_id: str) -> BlindCalibrationItem:
+    def spot_check_item(self, run: Run, task_id: str) -> BlindOutput:
         """What a human Spot-checking a queued Task of a judged Run sees: its input, Gold
         Answer, final Output and the Criteria still to check; never the Judge's scores,
         the Run or the Candidate. id is the Task id."""
         task = run.task(task_id)
+        check_clearance(run.candidate, task)  # the Run's Clearance, before any content
         left = run.spot_checks_left.get(task.id, ())
-        return BlindCalibrationItem(
-            id=task.id,
-            input=run.task_input(task.id),
-            criteria=tuple(c for c in task.rubric.criteria if c.id in left),
-            gold_answer=task.gold_answer_path.read_text().strip(),
-            output=run.final_output(task.id),
-        )
+        criteria = tuple(c for c in task.rubric.criteria if c.id in left)
+        return blind_output(task.id, task, run.final_output(task.id), criteria)
 
     @property
     def calibration_set(self) -> CalibrationSet:
@@ -744,7 +725,7 @@ class Workspace:
         """Every Calibration Set item's numbers, oldest first."""
         return self.calibration_set.items()
 
-    def unscored_calibration_items(self) -> tuple[BlindCalibrationItem, ...]:
+    def unscored_calibration_items(self) -> tuple[BlindOutput, ...]:
         """The items still awaiting a human score, as the human sees them: content only,
         never the Judge's scores, the Run or the Candidate."""
         cal = self.calibration_set
@@ -760,7 +741,7 @@ class Workspace:
         """Have the Judge Setup score every Calibration Set item it has not scored yet.
 
         The Judge sees what it sees in a Run (input, Rubric, Gold Answer, final Output),
-        never the human scores or the Candidate; TaskJudging.task_id is the item id.
+        never the human scores or the Candidate; TaskJudging.output_id is the item id.
         Refusals are raised before any judge model is called: no Judge Setup or judge
         models (JudgeUnavailable), a private item to a Judge Setup without private
         Clearance (JudgeClearanceError). Items scored before a malformed reply stay
@@ -770,21 +751,12 @@ class Workspace:
         cal = self.calibration_set
         items = [i for i in cal.items() if setup.hash not in i.judge_scores]
         for item in items:
-            if item.visibility == Visibility.PRIVATE and (
-                setup.clearance != Clearance.PUBLIC_AND_PRIVATE
-            ):
-                raise JudgeClearanceError(
-                    f"calibration item {item.id} is private and Judge Setup {setup.hash} "
-                    f"is cleared for {setup.clearance}"
-                )
+            check_judge_clearance(setup, item.visibility, f"calibration item {item.id}")
         models = {spec.label: self._judge_model(spec) for spec in setup.models}
         judged = []
         for item in items:
-            blind = cal.blind(item.id)
-            request = JudgeRequest(prompt=setup.prompt, input=blind.input,
-                                   criteria=blind.criteria, gold_answer=blind.gold_answer,
-                                   output=blind.output)
-            judging = _judging(item.id, request, models, same_family=False)
+            judging = _judging(cal.blind(item.id), setup, models, same_family=False,
+                               where=f"calibration item {item.id}")
             cal.record_judging(item.id, judging, setup)
             judged.append(judging)
         return tuple(judged)
@@ -980,17 +952,18 @@ class Workspace:
 
 
 def _judging(
-    task_id: str,
-    request: JudgeRequest,
+    blind: BlindOutput,
+    setup: JudgeSetup,
     models: Mapping[str, JudgeModel],
     *,
     same_family: bool,
-    where: str | None = None,
+    where: str,
 ) -> TaskJudging:
-    """Every judge model's parsed reply to the request."""
-    where = where or f"calibration item {task_id}"
+    """Every judge model's parsed reply to the Judge Setup's request for the Output;
+    where names it in a malformed reply's error."""
+    request = JudgeRequest.for_output(setup.prompt, blind)
     return TaskJudging(
-        task_id=task_id,
+        output_id=blind.id,
         judges={
             label: parse_reply(model.judge(request), request.criteria,
                                f"judge model {label} on {where}")

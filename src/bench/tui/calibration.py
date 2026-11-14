@@ -18,8 +18,9 @@ from textual.screen import Screen
 from textual.widgets import Button, Footer, Input, Label, OptionList, Select, Static
 from textual.widgets.option_list import Option
 
-from bench.core.calibration import Agreement, BlindCalibrationItem, CriterionAgreement
+from bench.core.calibration import Agreement, CriterionAgreement
 from bench.core.errors import CalibrationError, JudgingError, RunMismatch, UnknownRunError
+from bench.core.judging import JUDGE_FILE, BlindOutput
 from bench.core.rubric import Criterion
 from bench.core.workspace import Workspace
 
@@ -176,7 +177,7 @@ class CalibrationScoreScreen(Screen[bool | None]):
         Binding("escape", "leave", "Back without saving"),
     ]
 
-    def __init__(self, workspace: Workspace, item: BlindCalibrationItem) -> None:
+    def __init__(self, workspace: Workspace, item: BlindOutput) -> None:
         super().__init__()
         self.workspace = workspace
         self.item = item
@@ -235,7 +236,7 @@ def read_scores(screen: Screen, criteria: list[str]) -> dict[str, int]:
 
 def setup_status(judge_setup_hash: str | None, certified: bool) -> str:
     if judge_setup_hash is None:
-        return "No Judge Setup: config/judge.yaml is missing."
+        return f"No Judge Setup: {JUDGE_FILE} is missing."
     state = "certified" if certified else "not certified"
     return f"Judge Setup {judge_setup_hash}: {state}"
 

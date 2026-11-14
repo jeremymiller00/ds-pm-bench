@@ -524,7 +524,7 @@ def judging_summary(judged: tuple[TaskJudging, ...], *, overridden: bool = True)
     lines = ["Judged with the uncertified override logged to the Decision Log." if overridden
              else "Judged with the certified Judge Setup."]
     for judging in judged:
-        lines += ["", f"Task {judging.task_id}"]
+        lines += ["", f"Task {judging.output_id}"]
         if judging.same_family:
             lines.append(
                 "  Warning: a judge model is the same family as the Candidate, a bias "

@@ -22,14 +22,14 @@ from typing import Any
 import yaml
 
 from bench.core.errors import CalibrationError
-from bench.core.judging import JudgeSetup, TaskJudging
+from bench.core.judging import JUDGE_FOLDER, BlindOutput, JudgeSetup, TaskJudging, blind_output
 from bench.core.kinds import Visibility
+from bench.core.lookup import next_number
 from bench.core.rubric import Criterion, check_criterion_score, criterion_dict
 from bench.core.runs import Run
 
 CALIBRATION_FOLDER = "calibration"
 CONTENT_FOLDER = "content"
-JUDGE_FOLDER = "judge"
 
 _ITEM = re.compile(r"^c(\d{4,})\.yaml$")
 
@@ -51,17 +51,6 @@ class CalibrationItem:
     @property
     def human_scored(self) -> bool:
         return self.human_scores is not None
-
-
-@dataclass(frozen=True)
-class BlindCalibrationItem:
-    """What a human scoring an item sees: no Judge scores, no Run, no Candidate."""
-
-    id: str
-    input: str
-    criteria: tuple[Criterion, ...]
-    gold_answer: str
-    output: str
 
 
 @dataclass(frozen=True)
@@ -179,14 +168,14 @@ class CalibrationSet:
                     f"item {item.id}"
                 )
         self.folder.mkdir(exist_ok=True)
-        numbers = [int(m.group(1)) for p in self.folder.iterdir() if (m := _ITEM.match(p.name))]
-        item_id = f"c{max(numbers, default=0) + 1:04d}"
+        item_id = f"c{next_number(self.folder, _ITEM):04d}"
         content_root = task.root if task.visibility == Visibility.PRIVATE else self.root
+        blind = blind_output(item_id, task, run.final_output(task.id))
         content = {
-            "input": f"{task.canonical_prompt}\n\n{task.input_path.read_text().strip()}",
-            "criteria": [criterion_dict(c) for c in task.rubric.criteria],
-            "gold_answer": task.gold_answer_path.read_text(),
-            "output": run.final_output(task.id),
+            "input": blind.input,
+            "criteria": [criterion_dict(c) for c in blind.criteria],
+            "gold_answer": blind.gold_answer,
+            "output": blind.output,
         }
         content_path = _content_folder(content_root) / f"{item_id}.yaml"
         content_path.parent.mkdir(parents=True, exist_ok=True)
@@ -219,10 +208,10 @@ class CalibrationSet:
     def item(self, item_id: str) -> CalibrationItem:
         return _item(self._record(item_id))
 
-    def blind(self, item_id: str) -> BlindCalibrationItem:
+    def blind(self, item_id: str) -> BlindOutput:
         item = self.item(item_id)
         content = yaml.safe_load(self._content_path(item).read_text())
-        return BlindCalibrationItem(
+        return BlindOutput(
             id=item.id,
             input=content["input"],
             criteria=tuple(Criterion(**c) for c in content["criteria"]),

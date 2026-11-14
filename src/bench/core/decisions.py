@@ -19,6 +19,7 @@ import yaml
 
 from bench.core.calibration import Agreement, CriterionAgreement
 from bench.core.judging import JudgeSetup
+from bench.core.lookup import next_number
 from bench.core.verdicts import Verdict
 
 DECISIONS_FOLDER = "decisions"
@@ -96,8 +97,7 @@ def _agreement(a: CriterionAgreement) -> dict[str, Any]:
 def _append(root: Path, date: datetime.date, subject: str, entry: dict[str, Any]) -> Path:
     folder = root / DECISIONS_FOLDER
     folder.mkdir(exist_ok=True)
-    numbers = [int(m.group(1)) for p in _entries(folder) if (m := _ENTRY.match(p.name))]
-    number = max(numbers, default=0) + 1
+    number = next_number(folder, _ENTRY)
     path = folder / f"{number:04d}-{date.isoformat()}-{subject}.yaml"
     with path.open("x") as file:  # never overwrite an entry
         yaml.safe_dump(entry, file, sort_keys=False)

@@ -35,7 +35,7 @@ from bench.core.errors import (
     UnknownTaskError,
 )
 from bench.core.fields import FieldReader
-from bench.core.judging import JudgeSetup, TaskJudging
+from bench.core.judging import JUDGE_FOLDER, JudgeSetup, TaskJudging
 from bench.core.kinds import Clearance, Suite, Visibility
 from bench.core.lookup import find_by_id
 from bench.core.results import TaskResult
@@ -45,7 +45,6 @@ from bench.core.tasks import Task, TaskContext, load_version
 RUNS_FOLDER = "runs"
 RUN_FILE = "run.yaml"
 RESULTS_FOLDER = "results"
-JUDGE_FOLDER = "judge"
 # run.yaml key: the Spot-check queue, Task id -> Track, saved once the Run is judged.
 SPOT_CHECK_QUEUE = "spot_check_queue"
 
@@ -206,7 +205,7 @@ class Run:
         self.check_judge_setup(setup)
         snapshot = self._snapshot()
         recorded = snapshot.get("judge_setup")
-        task = self.task(judging.task_id)
+        task = self.task(judging.output_id)
         self.record_criterion_scores(task.id, judging.scores)
         if recorded is None:
             snapshot["judge_setup"] = setup.snapshot()

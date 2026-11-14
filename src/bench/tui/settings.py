@@ -15,7 +15,7 @@ from textual.widget import Widget
 from textual.widgets import Button, DataTable, Input, Label, Select, Static, TextArea
 
 from bench.core.errors import ConfigError
-from bench.core.judging import JudgeSetup, family_of
+from bench.core.judging import JUDGE_FILE, JudgeSetup, family_of
 from bench.core.kinds import Clearance, JudgeMode
 from bench.core.settings import BANDED_MEASURES, DIMENSIONS, Settings
 from bench.core.workspace import Workspace
@@ -76,7 +76,7 @@ def weight_sum(texts: list[str]) -> str:
 
 
 def models_yaml(setup: JudgeSetup | None) -> str:
-    """The judge models as config/judge.yaml lists them; family only when not the default."""
+    """The judge models as the Judge Setup file lists them; family only when not the default."""
     if setup is None:
         return ""
     models = []
@@ -218,7 +218,7 @@ class SettingsPane(VerticalScroll):
 
     def _compose_judge(self) -> ComposeResult:
         setup = self.workspace.judge_setup
-        yield Static("Judge Setup (config/judge.yaml).", markup=False)
+        yield Static(f"Judge Setup ({JUDGE_FILE}).", markup=False)
         yield Static(self._judge_status(), id="judge-status", markup=False)
         yield Static(
             "Changing the models or the prompt makes a new Judge Setup, which drops its "

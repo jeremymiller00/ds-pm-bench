@@ -25,13 +25,16 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from bench.core.errors import JudgeReplyError
+from bench.core.errors import JudgeClearanceError, JudgeReplyError
 from bench.core.fields import FieldReader
-from bench.core.kinds import Clearance, JudgeMode, Provider
+from bench.core.kinds import Clearance, JudgeMode, Provider, Visibility
 from bench.core.provider_registry import family_of
 from bench.core.rubric import Criterion, check_criterion_score
+from bench.core.tasks import Task
 
 JUDGE_FILE = "config/judge.yaml"
+# The folder judge reasons go in, beside a Run's Outputs or the Calibration Set's content.
+JUDGE_FOLDER = "judge"
 JUDGE_FIELDS = ("mode", "clearance", "prompt", "models")
 MODEL_FIELDS = ("provider", "model", "family", "env_var")
 
@@ -92,6 +95,44 @@ class JudgeSetup:
 
 
 @dataclass(frozen=True)
+class BlindOutput:
+    """An Output as a blind scorer sees it, human or Judge: the Canonical Prompt and
+    input, the Criteria to score, the Gold Answer and the final Output; never the Judge's
+    scores, the Run or the Candidate. id is the Task id in a Run, or the opaque item id
+    in the Calibration Set."""
+
+    id: str
+    input: str
+    criteria: tuple[Criterion, ...]
+    gold_answer: str
+    output: str
+
+
+def blind_output(
+    output_id: str, task: Task, output: str, criteria: tuple[Criterion, ...] | None = None
+) -> BlindOutput:
+    """The one builder of what a blind scorer sees of a Task's Output: the same text for
+    judging a Run, a Calibration Set item and a Spot-check. criteria defaults to the
+    Task's whole Rubric. The caller checks Clearance before calling."""
+    return BlindOutput(
+        id=output_id,
+        input=f"{task.canonical_prompt}\n\n{task.input_path.read_text().strip()}",
+        criteria=task.rubric.criteria if criteria is None else criteria,
+        gold_answer=task.gold_answer_path.read_text().strip(),
+        output=output,
+    )
+
+
+def check_judge_clearance(setup: JudgeSetup, visibility: Visibility, what: str) -> None:
+    """The one Private-Task Clearance check for judging: JudgeClearanceError for private
+    content and a Judge Setup not cleared for it (ADR-0006). what names the content."""
+    if visibility == Visibility.PRIVATE and setup.clearance != Clearance.PUBLIC_AND_PRIVATE:
+        raise JudgeClearanceError(
+            f"{what} is private and Judge Setup {setup.hash} is cleared for {setup.clearance}"
+        )
+
+
+@dataclass(frozen=True)
 class JudgeRequest:
     """Everything a judge model sees for one Output; never the Candidate's identity."""
 
@@ -100,6 +141,11 @@ class JudgeRequest:
     criteria: tuple[Criterion, ...]  # the Rubric: shared then task-specific Criteria
     gold_answer: str
     output: str  # the edited final Output
+
+    @classmethod
+    def for_output(cls, prompt: str, blind: BlindOutput) -> JudgeRequest:
+        return cls(prompt=prompt, input=blind.input, criteria=blind.criteria,
+                   gold_answer=blind.gold_answer, output=blind.output)
 
     def render(self) -> str:
         """The whole request as one text, for a model taking a single message."""
@@ -122,10 +168,10 @@ class CriterionJudgement:
 
 @dataclass(frozen=True)
 class TaskJudging:
-    """One Task's judging by a Judge Setup: every judge model's scores and reasons, and
-    the median per Criterion that becomes the Task's Criterion scores."""
+    """One Output's judging by a Judge Setup: every judge model's scores and reasons, and
+    the median per Criterion that becomes its Criterion scores."""
 
-    task_id: str
+    output_id: str  # BlindOutput.id: the Task id in a Run, the item id in the Calibration Set
     judges: Mapping[str, Mapping[str, CriterionJudgement]]  # label -> Criterion -> it
     same_family: bool  # a judge model shares the Candidate's family
 

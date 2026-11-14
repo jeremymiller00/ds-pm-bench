@@ -15,8 +15,8 @@ from textual.screen import Screen
 from textual.widgets import Footer, Label, OptionList, Static
 from textual.widgets.option_list import Option
 
-from bench.core.calibration import BlindCalibrationItem
 from bench.core.errors import CalibrationError, RunMismatch, UnknownRunError
+from bench.core.judging import BlindOutput
 from bench.core.rubric import check_criterion_score
 from bench.core.runs import Run
 from bench.core.workspace import Workspace
@@ -108,7 +108,7 @@ class SpotCheckTaskScreen(Screen[bool | None]):
         Binding("escape", "leave", "Back without saving"),
     ]
 
-    def __init__(self, run: Run, item: BlindCalibrationItem) -> None:
+    def __init__(self, run: Run, item: BlindOutput) -> None:
         super().__init__()
         self.run = run
         self.item = item
