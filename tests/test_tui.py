@@ -68,10 +68,7 @@ async def test_task_browser_groups_tasks_by_track_in_catalog_order(workspace_dir
 
 
 def configure_private_root(workspace_dir: Path, private: Path) -> None:
-    settings = workspace_dir / "config" / "settings.yaml"
-    settings.write_text(
-        settings.read_text().replace("private_roots: []", f"private_roots: ['{private}']")
-    )
+    (workspace_dir / "config" / "local.yaml").write_text(f"private_roots: ['{private}']\n")
 
 
 async def test_task_labels_mark_visibility_version_and_placeholders(
