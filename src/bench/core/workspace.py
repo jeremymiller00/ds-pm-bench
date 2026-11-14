@@ -32,6 +32,7 @@ from bench.core.errors import (
     GateNotPassed,
     JudgeNotCertified,
     JudgeRefused,
+    JudgeSetupMismatch,
     JudgeUnavailable,
     TaskAuthoringError,
     TaskNotRunnable,
@@ -535,7 +536,8 @@ class Workspace:
 
         Refused before any Judge is called: no Judge Setup or judge models
         (JudgeUnavailable); an uncertified Judge Setup without allow_uncertified
-        (JudgeNotCertified; certification arrives in slice 5); a Judge that is the
+        (JudgeNotCertified; certification arrives in slice 5); a Run already judged by
+        another Judge Setup (JudgeSetupMismatch); a Judge that is the
         Candidate under test (JudgeRefused); a Private Task to a Judge Setup without
         private Clearance (ClearanceError). Each allowed override is appended to the
         Decision Log. A malformed reply raises JudgeReplyError; Tasks judged before
@@ -551,6 +553,11 @@ class Workspace:
             raise JudgeNotCertified(
                 f"Judge Setup {setup.hash} is not certified; pass allow_uncertified=True "
                 "to judge anyway, which is logged to the Decision Log"
+            )
+        if run.judge_setup_hash not in (None, setup.hash):
+            raise JudgeSetupMismatch(
+                f"Run {run.id} was judged by Judge Setup {run.judge_setup_hash}, not "
+                f"{setup.hash}; a Run is scored by one Judge Setup"
             )
         candidate = run.candidate
         for spec in setup.models:
