@@ -5,3 +5,7 @@ An LLM judge scores every Output, but a Judge Setup is usable only after it agre
 ## Considered Options
 
 A fixed judge with only a 25% spot-check was rejected: it detects drift but never proves the judge was trustworthy to begin with.
+
+## Certification rules
+
+Certification belongs to one Judge Setup hash and one Clearance. It needs a minimum Calibration Set size (default 12 items, configurable), and every Criterion must meet both thresholds; a Criterion with no defined kappa, because both raters gave one constant score, is held to the within-1-point share alone. Widening the Judge's Clearance to Private Tasks drops Certification, because agreement measured on public items says nothing about private ones.
