@@ -268,9 +268,12 @@ class Workspace:
         """Begin working a Task of the Run by hand: returns the session showing its
         Canonical Prompt and input, with the clock started.
 
-        Clearance is checked before any content is read (ClearanceError).
+        Clearance is checked before any content is read (ClearanceError). A Task whose
+        Output is already recorded cannot be begun again (ValueError).
         """
         prompt = self.task_input(run, task_id)
+        if task_id not in run.pending:
+            raise ValueError(f"Run {run.id}: Task {task_id}'s Output is already recorded")
         return ManualSession(run, task_id, prompt, self.clock, self.editor)
 
     def resume_run(self, run_id: str) -> Run:

@@ -26,8 +26,10 @@ class ManualSession:
         self._started = clock.now()
         self._paused_seconds = 0.0
         self._paused_at: float | None = None
+        self._over: str | None = None  # "finished" or "abandoned"
         self.raw: str | None = None
         self.latency_seconds: float | None = None
+        self.draft: str | None = None  # the latest edit; the raw Output until edited
 
     @property
     def paused(self) -> bool:
@@ -41,10 +43,11 @@ class ManualSession:
 
     def submit_raw(self, raw: str) -> None:
         """The Candidate's raw Output, pasted back; stops the latency clock."""
+        self._check_open()
         if self.raw is not None:
             raise ValueError(f"Task {self.task_id}: the raw Output is already submitted")
         self.latency_seconds = self._clock.now() - self._started
-        self.raw = raw
+        self.raw = self.draft = raw
 
     def pause(self) -> None:
         """Pause the edit timer, such as for an interruption."""
@@ -54,27 +57,50 @@ class ManualSession:
         self._paused_at = self._clock.now()
 
     def resume(self) -> None:
+        self._check_open()
         if self._paused_at is None:
             raise ValueError(f"Task {self.task_id}: the edit timer is not paused")
         self._paused_seconds += self._clock.now() - self._paused_at
         self._paused_at = None
 
-    def finish(self, final: str) -> OutputRecord:
-        """Save raw and final with timings and cost; the session is then over.
+    def edit_externally(self) -> str:
+        """Open the draft in the Editor Adapter ($EDITOR); returns the edited text,
+        which becomes the draft. All the time it is open counts as active time."""
+        self._need_raw("edit")
+        if self.paused:
+            raise ValueError(f"Task {self.task_id}: resume the paused timer before editing")
+        self.draft = self._editor.edit(self.draft or "")
+        return self.draft
 
-        A pause still open at save time does not count as active time.
+    def finish(self, final: str | None = None) -> OutputRecord:
+        """Save raw and final (the draft when final is omitted) with timings and cost.
+
+        A pause still open at save time does not count as active time. The session is
+        then over.
         """
         raw = self._need_raw("finish")
-        return self.run.record_output(
+        record = self.run.record_output(
             self.task_id,
             raw=raw,
-            final=final,
+            final=self.draft if final is None else final,
             active_seconds=self.active_seconds,
             latency_seconds=self.latency_seconds,
             cost_usd=None,
         )
+        self._over = "finished"
+        return record
+
+    def abandon(self) -> None:
+        """Drop the session, recording nothing; the Task can be begun again."""
+        self._check_open()
+        self._over = "abandoned"
+
+    def _check_open(self) -> None:
+        if self._over is not None:
+            raise ValueError(f"Task {self.task_id}: this session is {self._over}")
 
     def _need_raw(self, action: str) -> str:
+        self._check_open()
         if self.raw is None:
             raise ValueError(f"Task {self.task_id}: submit the raw Output before you {action}")
         return self.raw
