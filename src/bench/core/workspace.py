@@ -82,9 +82,11 @@ from bench.core.runs import (
     suites_for,
     task_versions_used,
     tasks_in,
+    tracks_spot_checked_before,
 )
 from bench.core.scoring import RunScore, score_run
 from bench.core.settings import SETTINGS_FILE, Settings, load_settings
+from bench.core.spot_checks import spot_check_queue
 from bench.core.tasks import (
     CriterionSpec,
     Task,
@@ -686,7 +688,20 @@ class Workspace:
             if not override_logged(self.root, run.id, setup.hash):
                 log_override(self.root, self.clock.today(), run.id, candidate.id, setup.hash)
             judged.append(judging)
+        self._queue_spot_checks(run)
         return tuple(judged)
+
+    def _queue_spot_checks(self, run: Run) -> None:
+        """Once every Task is judged, sample the Run's Spot-check queue (set only once)."""
+        if run.unjudged or run.judge_setup_hash is None:
+            return
+        run.queue_spot_checks(spot_check_queue(
+            run.id,
+            run.tasks,
+            self.settings.spot_check_rate,
+            covered_before=tracks_spot_checked_before(self.root, run),
+            full_checks=run.full_human_checks,
+        ))
 
     def _judge_model(self, spec: JudgeModelSpec) -> JudgeModel:
         if self.judges is None:
