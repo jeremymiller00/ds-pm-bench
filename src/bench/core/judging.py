@@ -161,7 +161,38 @@ def load_judge_setup(root: Path) -> JudgeSetup | None:
     if not (root / JUDGE_FILE).is_file():
         return None
     f = FieldReader(JUDGE_FILE)
-    data = f.read(root)
+    return _parse(f, root, f.read(root), prompt=None)
+
+
+def edit_judge_setup(
+    root: Path, changes: Mapping[str, Any], prompt: str | None = None
+) -> JudgeSetup:
+    """Apply changes (mode, clearance, prompt: the prompt file's path, models) to
+    config/judge.yaml, starting from an empty one when it is absent, and write it back;
+    prompt, if given, is the prompt file's new text. Everything is validated before
+    anything is written: an invalid change raises ConfigError naming the field."""
+    f = FieldReader(JUDGE_FILE)
+    data = f.read(root) if (root / JUDGE_FILE).is_file() else {}
+    for key in changes:
+        if key not in JUDGE_FIELDS:
+            raise f.fail(key, f"unknown, expected one of {', '.join(JUDGE_FIELDS)}")
+    data = {**data, **changes}
+    setup = _parse(f, root, data, prompt=prompt)
+    if prompt is not None:
+        path = (root / setup.prompt_file).resolve()
+        if not path.is_relative_to(root.resolve()):
+            raise f.fail("prompt", f"{setup.prompt_file} is outside the Workspace root")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(prompt)
+    f.write(root, data)
+    return setup
+
+
+def _parse(
+    f: FieldReader, root: Path, data: dict[str, Any], *, prompt: str | None
+) -> JudgeSetup:
+    """The Judge Setup data describes; prompt, when given, is the prompt file's text to
+    be, else the file is read."""
     f.exact_keys(data, "(file)", JUDGE_FIELDS)
     mode = f.enum(data["mode"], "mode", JudgeMode)
     raw_models = data["models"]
@@ -177,10 +208,11 @@ def load_judge_setup(root: Path) -> JudgeSetup | None:
         if label in labels[:i]:
             raise f.fail(f"models[{i}]", f"duplicate model {label}")
     prompt_file = f.text(data["prompt"], "prompt")
-    path = root / prompt_file
-    if not path.is_file():
-        raise f.fail("prompt", f"file {prompt_file} does not exist")
-    prompt = path.read_text()
+    if prompt is None:
+        path = root / prompt_file
+        if not path.is_file():
+            raise f.fail("prompt", f"file {prompt_file} does not exist")
+        prompt = path.read_text()
     if not prompt.strip():
         raise f.fail("prompt", f"file {prompt_file} is empty")
     return JudgeSetup(

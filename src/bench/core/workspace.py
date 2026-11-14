@@ -73,6 +73,7 @@ from bench.core.judging import (
     JudgeRequest,
     JudgeSetup,
     TaskJudging,
+    edit_judge_setup,
     is_candidate_under_test,
     load_judge_setup,
     parse_reply,
@@ -81,7 +82,7 @@ from bench.core.judging import (
 from bench.core.kinds import AdapterKind, Clearance, Suite, Visibility
 from bench.core.lookup import find_by_id
 from bench.core.manual_time import ManualTimeStopwatch
-from bench.core.prices import PriceTable, load_prices
+from bench.core.prices import PriceTable, load_prices, remove_price, set_price
 from bench.core.results import TaskResult
 from bench.core.rubric import Rubric, load_rubric
 from bench.core.runs import (
@@ -99,7 +100,7 @@ from bench.core.runs import (
     tracks_spot_checked_before,
 )
 from bench.core.scoring import RunScore, score_run
-from bench.core.settings import SETTINGS_FILE, Settings, load_settings
+from bench.core.settings import SETTINGS_FILE, Settings, edit_settings, load_settings
 from bench.core.spot_checks import spot_check_queue
 from bench.core.tasks import (
     CriterionSpec,
@@ -108,6 +109,7 @@ from bench.core.tasks import (
     TaskRoot,
     edit_task,
     load_tasks,
+    load_version,
     scaffold_task,
 )
 from bench.core.verdicts import Comparison, Verdict, compare, gate_verdict
@@ -839,6 +841,79 @@ class Workspace:
         return open_run(
             self.task_context, run_id, {c.id: c for c in self.candidates}, self.tasks
         )
+
+    def update_settings(self, **changes: Any) -> Settings:
+        """Change settings and write config/settings.yaml back (ADR-0001).
+
+        changes are among tracks, weights, regression_margin, retest_margin,
+        spot_check_rate, calibration and normalization; a mapping merges into the
+        current one by key, so weights={"quality": 40, "edit_distance": 30} changes two
+        weights. The result is validated as on load: an invalid change, weights not
+        summing to 100 included, raises ConfigError naming the field and writes nothing.
+        Private roots are machine-specific (config/local.yaml) and not edited here.
+
+        Removing (or renaming) a Track that a Task, or a Task version a Run used, still
+        declares raises ConfigEditRefused naming them, since that Run could no longer
+        load.
+        """
+        self.settings = edit_settings(self.root, changes, self._tracks_in_use())
+        return self.settings
+
+    def set_price(
+        self, model: str, *, input_per_mtok: float, output_per_mtok: float
+    ) -> PriceTable:
+        """Add or change a model's token prices (USD per million tokens) in
+        config/prices.yaml. The model is the exact string a Candidate uses. An invalid
+        price raises ConfigError naming the field and writes nothing."""
+        self.prices = set_price(self.root, model, input_per_mtok, output_per_mtok)
+        return self.prices
+
+    def remove_price(self, model: str) -> PriceTable:
+        """Remove a model from the price table; ConfigError if it has no price. A Run's
+        recorded costs are kept: cost is computed when a Task is sent."""
+        self.prices = remove_price(self.root, model)
+        return self.prices
+
+    def update_judge_setup(
+        self,
+        *,
+        mode: str | None = None,
+        models: Iterable[Mapping[str, Any]] | None = None,
+        clearance: str | None = None,
+        prompt_file: str | None = None,
+        prompt: str | None = None,
+    ) -> JudgeSetup:
+        """Change the Judge Setup in config/judge.yaml, creating it if absent.
+
+        mode is single or panel; models each {provider, model} with optional family and
+        env_var, replacing the current list; clearance public_only or
+        public_and_private; prompt_file the judge prompt's path relative to the
+        Workspace root; prompt the new text of the prompt file. Validated as on load:
+        an invalid change raises ConfigError naming the field and writes nothing.
+
+        Changing the models or the prompt text makes a new Judge Setup with a new hash,
+        which has no Certification (ADR-0003); mode, clearance and env_var are not part
+        of the hash. Runs keep the hash of the Judge Setup that judged them.
+        """
+        given = {"mode": mode, "clearance": clearance, "prompt": prompt_file,
+                 "models": None if models is None else [dict(m) for m in models]}
+        changes = {k: v for k, v in given.items() if v is not None}
+        self.judge_setup = edit_judge_setup(self.root, changes, prompt)
+        return self.judge_setup
+
+    def _tracks_in_use(self) -> dict[str, list[str]]:
+        """Each Track a loaded Task or a Run's Task version declares -> what declares it."""
+        used: dict[str, list[str]] = {}
+        for task in self.tasks:
+            used.setdefault(task.track, []).append(f"Task {task.id}")
+        for task_id, version in sorted(task_versions_used(self.root)):
+            task = find_by_id(self.tasks, task_id)
+            if task is None or task.version == version:
+                continue
+            old = load_version(self.task_context, task, version)
+            if old is not None:
+                used.setdefault(old.track, []).append(f"Task {task_id} version {version}")
+        return used
 
     def score(self, results: Iterable[TaskResult]) -> RunScore:
         """Score a Run's per-Task result records with this Workspace's weights and bands."""
