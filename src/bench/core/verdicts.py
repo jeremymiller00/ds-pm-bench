@@ -57,6 +57,12 @@ class Comparison:
     baseline_score: RunScore
     verdict: Verdict
 
+    @property
+    def judge_setup_hash(self) -> str | None:
+        """The Judge Setup both Runs were scored by; None if they differ or are unknown."""
+        a, b = self.challenger.judge_setup_hash, self.baseline.judge_setup_hash
+        return a if a == b else None
+
 
 def compare(
     settings: Settings,
@@ -76,10 +82,16 @@ def compare(
     outcome, rationale, regressions = apply_adopt_rule(
         settings, challenger_score, baseline_score, worst
     )
-    warnings = ()
+    warnings: tuple[str, ...] = ()
     days = abs((challenger.date - baseline.date).days)
     if days > SAME_WEEK_DAYS:
-        warnings = (f"the Runs are {days} days apart, more than a week",)
+        warnings += (f"the Runs are {days} days apart, more than a week",)
+    a, b = challenger.judge_setup_hash, baseline.judge_setup_hash
+    if a != b and a is not None and b is not None:
+        warnings += (
+            f"the Runs were scored by different Judge Setups ({a} vs {b}), so their "
+            "scores may not be comparable",
+        )
     verdict = Verdict(
         outcome=outcome,
         suite=challenger.suite,

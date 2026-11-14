@@ -1,4 +1,5 @@
-"""The Decision Log: decisions/NNNN-<date>-<candidate>.yaml, one dated entry per Verdict.
+"""The Decision Log: decisions/NNNN-<date>-<candidate>.yaml, one dated entry per Verdict,
+and one per exception, such as an uncertified-Judge override (kind names which).
 
 Append-only plain files (ADR-0001): each entry gets the next sequence number and is
 created exclusively, so an existing entry is never rewritten. A superseding Verdict
@@ -24,13 +25,30 @@ _ENTRY = re.compile(r"^(\d{4,})-")
 def log_verdict(
     root: Path, verdict: Verdict, date: datetime.date, judge_setup_hash: str | None
 ) -> Path:
+    return _append(root, date, verdict.candidate_id, _entry(verdict, date, judge_setup_hash))
+
+
+def log_override(
+    root: Path, date: datetime.date, run_id: str, candidate_id: str, judge_setup_hash: str
+) -> Path:
+    """Log judging a Run with an uncertified Judge Setup (ADR-0002)."""
+    return _append(root, date, candidate_id, {
+        "kind": "uncertified_judge_override",
+        "date": date.isoformat(),
+        "run": run_id,
+        "candidate": {"id": candidate_id},
+        "judge_setup_hash": judge_setup_hash,
+    })
+
+
+def _append(root: Path, date: datetime.date, candidate_id: str, entry: dict[str, Any]) -> Path:
     folder = root / DECISIONS_FOLDER
     folder.mkdir(exist_ok=True)
     numbers = [int(m.group(1)) for p in _entries(folder) if (m := _ENTRY.match(p.name))]
     number = max(numbers, default=0) + 1
-    path = folder / f"{number:04d}-{date.isoformat()}-{verdict.candidate_id}.yaml"
+    path = folder / f"{number:04d}-{date.isoformat()}-{candidate_id}.yaml"
     with path.open("x") as file:  # never overwrite an entry
-        yaml.safe_dump(_entry(verdict, date, judge_setup_hash), file, sort_keys=False)
+        yaml.safe_dump(entry, file, sort_keys=False)
     return path
 
 
@@ -53,6 +71,7 @@ def _entry(
     verdict: Verdict, date: datetime.date, judge_setup_hash: str | None
 ) -> dict[str, Any]:
     return {
+        "kind": "verdict",
         "date": date.isoformat(),
         "candidate": {"id": verdict.candidate_id, "version": verdict.candidate_version},
         "baseline": {"id": verdict.baseline_id, "version": verdict.baseline_version},

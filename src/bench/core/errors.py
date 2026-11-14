@@ -82,6 +82,28 @@ class SuiteMismatch(Exception):
     """Two Runs cannot be compared: they do not cover the same Tasks at the same versions."""
 
 
+class JudgeUnavailable(Exception):
+    """Judging cannot start: no Judge Setup in config/judge.yaml, or no judge models
+    were given to the Workspace."""
+
+
+class JudgeNotCertified(Exception):
+    """The Judge Setup is not certified; judging needs an explicit, logged override."""
+
+
+class JudgeRefused(Exception):
+    """The Judge Setup includes the Candidate under test, which would grade itself."""
+
+
+class JudgeReplyError(ValueError):
+    """A Judge's reply is malformed: not JSON, a Criterion missing or unknown, a score
+    outside 1-5 or a reason that is not one line. Nothing is recorded for the Task."""
+
+
+class JudgeSetupMismatch(Exception):
+    """A Run already judged by one Judge Setup cannot be judged by another."""
+
+
 class CandidateToolError(Exception):
     """An automated Candidate's tool errored: an API error, a timeout or no Output."""
 

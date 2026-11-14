@@ -305,6 +305,7 @@ def test_a_comparisons_verdict_is_logged_with_its_rationale(private_ws_dir: Path
     assert path == private_ws_dir / "decisions" / "0001-2026-11-13-other@1.yaml"
     entry = yaml.safe_load(path.read_text())
     assert entry == {
+        "kind": "verdict",
         "date": "2026-11-13",
         "candidate": {"id": "other@1", "version": "other-1"},
         "baseline": {"id": "claude@opus-5-5", "version": "claude-opus-5-5"},

@@ -143,7 +143,29 @@ line is the Verdict and its label (`adopt (public-only Suite, not a full adopt)`
 the Suite was public only), followed by the rationale. The rules apply in order:
 Gate, Spot-check, Regression, then the weighted score against the Baseline (adopt,
 re-test within the margin, reject). `--log` appends it to
-the Decision Log under `decisions/`.
+the Decision Log under `decisions/`, with the hash of the Judge Setup that scored both
+Runs unless `--judge-setup-hash` is given.
+
+### Judge Setup
+
+`config/judge.yaml` names the Judge Setup (ADR 0002, 0003):
+
+```yaml
+mode: panel                  # single: exactly one model; panel: two or more
+clearance: public_only       # or public_and_private, to judge Private Tasks
+prompt: config/judge/prompt.md
+models:
+  - {provider: openai, model: gpt-6}
+  - {provider: google, model: gemini-4}
+  # family: [chatbot]        # optional: Candidate tools of this model's family
+```
+
+Its hash covers the models and the prompt, so editing either is a new Judge Setup.
+`Workspace.judge_run(run, allow_uncertified=True)` scores every recorded, unscored
+Output blind; until certification lands every Judge Setup is uncertified, so the
+override is required and each one is logged to the Decision Log. A Judge that is the
+Candidate under test is refused, and a same-family Judge marks Tasks for a full human
+check.
 
 ### Golden fixtures
 
