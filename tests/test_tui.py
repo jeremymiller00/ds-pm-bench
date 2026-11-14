@@ -3,11 +3,14 @@
 from pathlib import Path
 
 import pytest
-from textual.widgets import Static, TabbedContent, Tabs, Tree
+from textual.widgets import Static, TabbedContent, Tabs, TextArea, Tree
 
 from bench import Workspace
 from bench.cli import main
 from bench.tui.app import BenchApp
+from bench.tui.task_editor import TaskEditorScreen
+from test_workspace_candidates import write_candidate
+from test_workspace_runs import cleared
 
 
 def write_task(
@@ -143,3 +146,49 @@ def test_bench_with_no_command_or_tui_opens_the_app_on_the_workspace(
 
     assert [ws.root for ws in opened] == [workspace_dir.resolve()]
     assert [t.id for t in opened[0].tasks] == ["T1.1"]
+
+
+def run_over(workspace_dir: Path) -> None:
+    """A fixture Run that uses every public Task's current version."""
+    write_candidate(workspace_dir, "claude@opus-5-5", cleared("public_only", baseline=True))
+    Workspace.open(workspace_dir).start_run("claude@opus-5-5")
+
+
+async def open_editor(app: BenchApp, pilot, task_id: str = "T1.1") -> None:
+    tree = app.query_one("#task-tree", Tree)
+    node = next(n for track in tree.root.children for n in track.children if n.data == task_id)
+    tree.move_cursor(node)
+    await pilot.press("e")
+    await pilot.pause()
+
+
+def fill(app: BenchApp, selector: str, value: str) -> None:
+    widget = app.screen.query_one(selector)
+    if isinstance(widget, TextArea):
+        widget.text = value
+    else:
+        widget.value = value
+
+
+async def test_editing_a_task_a_run_used_saves_a_new_version_and_says_so(
+    workspace_dir: Path,
+):
+    write_task(workspace_dir, "T1.1")
+    run_over(workspace_dir)
+
+    app = BenchApp(Workspace.open(workspace_dir))
+    async with app.run_test() as pilot:
+        await open_editor(app, pilot)
+        assert isinstance(app.screen, TaskEditorScreen)
+        fill(app, "#edit-trap", "Recommends a model before naming the decision.")
+        await pilot.press("ctrl+s")
+        await pilot.pause()
+
+        assert not isinstance(app.screen, TaskEditorScreen)
+        assert tree_outline(app)["Framing (1)"] == ["T1.1  public  v2  ready"]
+        status = str(app.query_one("#task-status", Static).content)
+
+    assert "T1.1 saved as v2" in status
+    assert "new version" in status
+    task = Workspace.open(workspace_dir).task("T1.1")
+    assert (task.version, task.trap) == (2, "Recommends a model before naming the decision.")

@@ -1,21 +1,25 @@
-"""The Task browser: Tasks grouped by Track, with one Task's details read-only."""
+"""The Task browser: Tasks grouped by Track, one Task's details, and keys to edit or add Tasks."""
 
 from __future__ import annotations
 
 from textual import on
 from textual.app import ComposeResult
-from textual.containers import Horizontal, VerticalScroll
+from textual.binding import Binding
+from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.widgets import Static, Tree
 
 from bench.core.tasks import Task
 from bench.core.workspace import Workspace
+from bench.tui.task_editor import TaskEditorScreen
 
 
-class TaskBrowser(Horizontal):
+class TaskBrowser(Vertical):
     DEFAULT_CSS = """
     TaskBrowser #task-tree { width: 1fr; }
     TaskBrowser #task-details-pane { width: 2fr; padding: 0 1; }
+    TaskBrowser #task-status { height: auto; padding: 0 1; }
     """
+    BINDINGS = [Binding("e", "edit_task", "Edit Task")]
 
     def __init__(self, workspace: Workspace) -> None:
         super().__init__()
@@ -24,14 +28,59 @@ class TaskBrowser(Horizontal):
     def compose(self) -> ComposeResult:
         tree: Tree[str] = Tree("Tasks", id="task-tree")
         tree.show_root = False
+        self._fill_tree(tree)
+        with Horizontal():
+            yield tree
+            with VerticalScroll(id="task-details-pane"):
+                yield Static(
+                    "Select a Task to see its details.", id="task-details", markup=False
+                )
+        yield Static("", id="task-status", markup=False)
+
+    def _fill_tree(self, tree: Tree[str]) -> None:
+        tree.clear()
         for track in self.workspace.settings.tracks:
             tasks = [t for t in self.workspace.tasks if t.track == track]
             node = tree.root.add(f"{track} ({len(tasks)})", expand=True)
             for task in tasks:
                 node.add_leaf(task_label(task), data=task.id)
-        yield tree
-        with VerticalScroll(id="task-details-pane"):
-            yield Static("Select a Task to see its details.", id="task-details", markup=False)
+
+    def refresh_tasks(self, select: str | None = None) -> None:
+        """Rebuild the tree from the Workspace, with the cursor on the Task select names."""
+        tree = self.query_one("#task-tree", Tree)
+        self._fill_tree(tree)
+        for track in tree.root.children:
+            for node in track.children:
+                if node.data == select:
+                    tree.move_cursor(node)
+
+    def _highlighted_task(self) -> str | None:
+        node = self.query_one("#task-tree", Tree).cursor_node
+        return None if node is None else node.data
+
+    def action_edit_task(self) -> None:
+        task_id = self._highlighted_task()
+        if task_id is None:
+            self._status("Highlight a Task to edit it.")
+            return
+        before = self.workspace.task(task_id).version
+
+        def saved(task: Task | None) -> None:
+            if task is None:
+                return
+            self.refresh_tasks(select=task.id)
+            if task.version > before:
+                self._status(
+                    f"{task.id} saved as v{task.version} "
+                    f"(a new version: a Run used v{before})."
+                )
+            else:
+                self._status(f"{task.id} saved as v{task.version} (edited in place).")
+
+        self.app.push_screen(TaskEditorScreen(self.workspace, task_id), saved)
+
+    def _status(self, message: str) -> None:
+        self.query_one("#task-status", Static).update(message)
 
     def on_mount(self) -> None:
         tree = self.query_one("#task-tree", Tree)
