@@ -1,22 +1,27 @@
 """Benchmark settings: config/settings.yaml, plus the machine-specific config/local.yaml.
 
 settings.yaml is public: Tracks, weights, margins, bands. local.yaml is git-ignored and
-optional: the private root paths (ADR-0006), which are home paths not worth publishing.
+optional: the private root paths (ADR-0006), which are home paths not worth publishing,
+and public_denylist, patterns the pre-commit check warns about in Public Tasks (story
+69), which would themselves name what is internal.
 """
 
 from __future__ import annotations
 
+import re
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import yaml
 
+from bench.core.errors import ConfigEditRefused
 from bench.core.fields import FieldReader
 
 SETTINGS_FILE = "config/settings.yaml"
 LOCAL_FILE = "config/local.yaml"
-LOCAL_FIELDS = ("private_roots",)
+LOCAL_FIELDS = ("private_roots", "public_denylist")
 
 DIMENSIONS = ("quality", "edit_distance", "time_saved", "cost_latency")
 
@@ -32,10 +37,16 @@ class Band:
     thresholds: tuple[float, float, float, float]
 
 
+# The smallest Calibration Set a Judge Setup is certified on when settings name none
+# (ADR-0002).
+DEFAULT_MIN_CALIBRATION_ITEMS = 12
+
+
 @dataclass(frozen=True)
 class CalibrationThresholds:
     within_one_point: float
     weighted_kappa: float
+    min_items: int = DEFAULT_MIN_CALIBRATION_ITEMS  # fully scored items Certification needs
 
 
 @dataclass(frozen=True)
@@ -48,18 +59,70 @@ class Settings:
     calibration: CalibrationThresholds
     normalization: dict[str, Band]
     private_roots: tuple[Path, ...]
+    # config/local.yaml: case-insensitive regular expressions a Public Task's input or
+    # Gold Answer should never match (story 69).
+    public_denylist: tuple[str, ...] = ()
+
+
+# The settings update_settings can change; mappings among them merge by key.
+EDITABLE_FIELDS = (
+    "tracks", "weights", "regression_margin", "retest_margin", "spot_check_rate",
+    "calibration", "normalization",
+)
 
 
 def load_settings(root: Path) -> Settings:
     f = FieldReader(SETTINGS_FILE)
+    return _parse(f, root, f.read(root))
+
+
+def edit_settings(
+    root: Path, changes: Mapping[str, Any], tracks_in_use: Mapping[str, list[str]]
+) -> Settings:
+    """Apply changes to config/settings.yaml, validate the result and write it back.
+
+    Each change replaces a top-level setting, except that a mapping (weights,
+    calibration, normalization) merges into the current one by key, so one weight or
+    one band can be given alone. Invalid changes raise ConfigError naming the field, and
+    dropping a Track in tracks_in_use (Track -> what uses it) raises ConfigEditRefused;
+    either way nothing is written.
+    """
+    f = FieldReader(SETTINGS_FILE)
     data = f.read(root)
+    for key, value in changes.items():
+        if key == "private_roots":
+            raise f.fail(key, f"belongs in the git-ignored {LOCAL_FILE}, not edited here")
+        if key not in EDITABLE_FIELDS:
+            raise f.fail(key, f"unknown, expected one of {', '.join(EDITABLE_FIELDS)}")
+        current = data.get(key)
+        if isinstance(value, dict) and isinstance(current, dict):
+            value = {**current, **value}
+        data[key] = value
+    settings = _parse(f, root, data)
+    for track, users in tracks_in_use.items():
+        if track not in settings.tracks:
+            raise ConfigEditRefused(
+                SETTINGS_FILE, "tracks",
+                f"cannot remove Track {track!r}: used by {', '.join(users)}; move "
+                "those Tasks to another Track first (a Run's Task version cannot move)",
+            )
+    f.write(root, data)
+    return settings
+
+
+def _parse(f: FieldReader, root: Path, data: dict[str, Any]) -> Settings:
     if "private_roots" in data:
         raise f.fail(
             "private_roots",
             f"belongs in the git-ignored {LOCAL_FILE}, not the public settings",
         )
     calibration = f.mapping(data.get("calibration"), "calibration")
-    f.exact_keys(calibration, "calibration", ("within_one_point", "weighted_kappa"))
+    min_items = calibration.get("min_items", DEFAULT_MIN_CALIBRATION_ITEMS)
+    f.exact_keys({"min_items": min_items, **calibration}, "calibration",
+                 ("within_one_point", "weighted_kappa", "min_items"))
+    if isinstance(min_items, bool) or not isinstance(min_items, int) or min_items < 1:
+        raise f.fail("calibration.min_items",
+                     f"must be a whole number of at least 1, got {min_items!r}")
     return Settings(
         tracks=_tracks(f, data.get("tracks")),
         weights=_weights(f, data.get("weights")),
@@ -75,28 +138,52 @@ def load_settings(root: Path) -> Settings:
             weighted_kappa=f.fraction(
                 calibration["weighted_kappa"], "calibration.weighted_kappa"
             ),
+            min_items=min_items,
         ),
         normalization=_normalization(f, data.get("normalization")),
-        private_roots=_load_private_roots(root),
+        private_roots=_load_local(root).get("private_roots", ()),
+        public_denylist=load_public_denylist(root),
     )
 
 
-def _load_private_roots(root: Path) -> tuple[Path, ...]:
-    """The private roots in config/local.yaml; none when the file is absent."""
+def load_public_denylist(root: Path) -> tuple[str, ...]:
+    """The public_denylist patterns in config/local.yaml; none when absent."""
+    return _load_local(root).get("public_denylist", ())
+
+
+def _load_local(root: Path) -> dict[str, Any]:
+    """config/local.yaml's validated fields; empty when the file is absent or blank."""
     if not (root / LOCAL_FILE).is_file():
-        return ()
+        return {}
     f = FieldReader(LOCAL_FILE)
     try:
         empty = yaml.safe_load((root / LOCAL_FILE).read_text()) is None
     except yaml.YAMLError:
         empty = False  # f.read reports it, naming the file
     if empty:
-        return ()  # blank or comments only, such as a fresh copy of the example
+        return {}  # blank or comments only, such as a fresh copy of the example
     data = f.read(root)
     for key in data:
         if key not in LOCAL_FIELDS:
             raise f.fail(str(key), f"unknown, expected one of {', '.join(LOCAL_FIELDS)}")
-    return _private_roots(f, root, data.get("private_roots", []))
+    return {
+        "private_roots": _private_roots(f, root, data.get("private_roots", [])),
+        "public_denylist": _denylist(f, data.get("public_denylist", [])),
+    }
+
+
+def _denylist(f: FieldReader, value: Any) -> tuple[str, ...]:
+    if not isinstance(value, list):
+        raise f.fail("public_denylist", "must be a list of regular expressions")
+    patterns = []
+    for i, entry in enumerate(value):
+        pattern = f.text(entry, f"public_denylist[{i}]")
+        try:
+            re.compile(pattern)
+        except re.error as exc:
+            raise f.fail(f"public_denylist[{i}]", f"not a regular expression: {exc}") from None
+        patterns.append(pattern)
+    return tuple(patterns)
 
 
 def _tracks(f: FieldReader, value: Any) -> tuple[str, ...]:

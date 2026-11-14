@@ -41,6 +41,7 @@ from bench.core.manual_time import ManualTimeStopwatch
 from bench.core.runs import OutputRecord, Run
 from bench.core.tasks import Task
 from bench.core.workspace import Workspace
+from bench.tui.spot_checks import SpotCheckScreen
 
 # What the Workspace refuses when starting or resuming a Run, shown inline.
 RUN_ERRORS = (
@@ -94,6 +95,7 @@ class RunsPane(Vertical):
         with Horizontal(id="run-actions"):
             yield Button("Send Tasks", id="run-send", disabled=True)
             yield Button("Judge Run", id="run-judge", disabled=True)
+            yield Button("Spot-checks", id="run-spot-check", disabled=True)
         yield Label("Pending Tasks (enter to work or edit one)")
         yield OptionList(id="run-tasks")
         yield Label("Tasks with Manual Time still a placeholder (enter to time one by hand)")
@@ -188,6 +190,8 @@ class RunsPane(Vertical):
         self.query_one("#run-progress", Static).update(run_progress(run))
         # Judging needs a finished Run: every Task's Output recorded.
         self.query_one("#run-judge", Button).disabled = bool(run.pending)
+        # Judging queues the Spot-checks.
+        self.query_one("#run-spot-check", Button).disabled = not run.spot_check_queue
         tasks = self.query_one("#run-tasks", OptionList)
         tasks.clear_options()
         if run.candidate.manual_assisted:
@@ -209,6 +213,21 @@ class RunsPane(Vertical):
                 self._status(f"Judged {len(judged)} Task(s) of Run {run.id}.")
 
         self.app.push_screen(JudgeScreen(self.workspace, run), closed)
+
+    @on(Button.Pressed, "#run-spot-check")
+    def _spot_check(self) -> None:
+        run = self.run
+        if run is None:
+            return
+
+        def closed(_: None) -> None:
+            left = run.spot_checks_left
+            self._status(
+                f"Spot-checks of Run {run.id}: {len(left)} queued Task(s) left."
+                if left else f"Every queued Spot-check of Run {run.id} is done."
+            )
+
+        self.app.push_screen(SpotCheckScreen(self.workspace, run), closed)
 
     def _automated_label(self, run: Run, task_id: str) -> str:
         if self.workspace.returned_output(run, task_id) is not None:
@@ -415,8 +434,8 @@ EDITOR_NOTE = (
     "as active time."
 )
 class JudgeScreen(Screen[tuple[TaskJudging, ...] | None]):
-    """Judge a Run: shows the Judge Setup and its hash and, until Certification arrives,
-    asks for an explicit override that the Workspace logs. Then shows each Task's
+    """Judge a Run: shows the Judge Setup and its hash and, unless it is certified, asks
+    for an explicit override that the Workspace logs. Then shows each Task's
     Criterion scores with every judge model's reason, Panel disagreements and bias
     warnings.
 
@@ -435,35 +454,40 @@ class JudgeScreen(Screen[tuple[TaskJudging, ...] | None]):
         self.workspace = workspace
         self.run = run
         self.judged: tuple[TaskJudging, ...] | None = None
+        self.certified = workspace.judge_certified
 
     def compose(self) -> ComposeResult:
         setup = self.workspace.judge_setup
         with VerticalScroll():
             yield Static(f"Judge Run {self.run.id}", markup=False)
             yield Static(judge_setup_summary(setup), id="judge-setup", markup=False)
-            yield Static(UNCERTIFIED_NOTICE, id="judge-certification", markup=False)
-            yield Button("Judge with uncertified override (logged)", id="judge-override",
-                         variant="warning", disabled=setup is None)
+            if self.certified:
+                yield Static(CERTIFIED_NOTICE, id="judge-certification", markup=False)
+                yield Button("Judge Run", id="judge-run", variant="primary")
+            else:
+                yield Static(UNCERTIFIED_NOTICE, id="judge-certification", markup=False)
+                yield Button("Judge with uncertified override (logged)", id="judge-override",
+                             variant="warning", disabled=setup is None)
             yield Static("", id="judge-results", markup=False)
         yield Footer()
 
-    @on(Button.Pressed, "#judge-override")
-    def _override(self) -> None:
-        self.query_one("#judge-override", Button).disabled = True
+    @on(Button.Pressed, "#judge-override, #judge-run")
+    def _start_judging(self, event: Button.Pressed) -> None:
+        event.button.disabled = True
         self._results("Judging...")
-        self.run_worker(self._judge(), group="judge", exclusive=True)
+        self.run_worker(self._judge(event.button), group="judge", exclusive=True)
 
-    async def _judge(self) -> None:
+    async def _judge(self, button: Button) -> None:
         try:
             judged = await asyncio.to_thread(
-                self.workspace.judge_run, self.run, allow_uncertified=True
+                self.workspace.judge_run, self.run, allow_uncertified=not self.certified
             )
         except JudgingError as exc:
             self._results(f"Not judged: {exc}")
-            self.query_one("#judge-override", Button).disabled = False
+            button.disabled = False
             return
         self.judged = judged
-        self._results(judging_summary(judged))
+        self._results(judging_summary(judged, overridden=not self.certified))
 
     def action_leave(self) -> None:
         self.dismiss(self.judged)
@@ -472,9 +496,13 @@ class JudgeScreen(Screen[tuple[TaskJudging, ...] | None]):
         self.query_one("#judge-results", Static).update(message)
 
 
+CERTIFIED_NOTICE = (
+    "This Judge Setup is certified on the human-scored Calibration Set: judging needs no "
+    "override. Escape goes back without judging."
+)
 UNCERTIFIED_NOTICE = (
-    "This Judge Setup is not certified: Certification against the human-scored "
-    "Calibration Set is not built yet. Judging needs an explicit override, and every "
+    "This Judge Setup is not certified: certify it in the Calibration tab, against the "
+    "human-scored Calibration Set. Until then judging needs an explicit override, and every "
     "override is logged to the Decision Log with the Judge Setup hash. Escape goes back "
     "without judging."
 )
@@ -490,12 +518,13 @@ def judge_setup_summary(setup: JudgeSetup | None) -> str:
     )
 
 
-def judging_summary(judged: tuple[TaskJudging, ...]) -> str:
+def judging_summary(judged: tuple[TaskJudging, ...], *, overridden: bool = True) -> str:
     if not judged:
         return "Nothing to judge: every recorded Output is already scored."
-    lines = ["Judged with the uncertified override logged to the Decision Log."]
+    lines = ["Judged with the uncertified override logged to the Decision Log." if overridden
+             else "Judged with the certified Judge Setup."]
     for judging in judged:
-        lines += ["", f"Task {judging.task_id}"]
+        lines += ["", f"Task {judging.output_id}"]
         if judging.same_family:
             lines.append(
                 "  Warning: a judge model is the same family as the Candidate, a bias "

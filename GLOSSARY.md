@@ -138,6 +138,10 @@ The Judge model or panel plus the judge prompt, identified by a content hash.
 **Spot-check**:
 A human scoring of a sampled Output during a Run, used to detect Judge drift.
 
+**Spot-check queue**:
+The Tasks of a judged Run chosen for a Spot-check, including every Task marked for a full human check.
+_Avoid_: Review list, sample
+
 **Calibration Set**:
 A fixed collection of Outputs scored blind by a human expert, used to test the Judge.
 

@@ -13,6 +13,11 @@ class ConfigError(ValueError):
         super().__init__(f"{file}: {field}: {message}")
 
 
+class ConfigEditRefused(ConfigError):
+    """A config edit that would invalidate what already exists, such as removing a Track
+    a Task or a Run's Task version uses. Names the file and field; nothing is written."""
+
+
 class UnknownTaskError(LookupError):
     """No Task with the requested id in any loaded root."""
 
@@ -82,6 +87,16 @@ class SuiteMismatch(Exception):
     """Two Runs cannot be compared: they do not cover the same Tasks at the same versions."""
 
 
+class SpotChecksUnfinished(Exception):
+    """A Comparison refuses to reach a Verdict while either Run has queued Spot-checks a
+    human has not finished: a Verdict is never computed on unchecked judging."""
+
+
+class SpotCheckError(ValueError):
+    """A Spot-check score was refused: a Task with no Criterion scores to check, a
+    Criterion not in its Rubric, or a score outside 1-5. Nothing is recorded."""
+
+
 class JudgingError(Exception):
     """Judging a Run was refused or failed; every judging error is one of these."""
 
@@ -118,6 +133,16 @@ class JudgeSetupMismatch(JudgingError):
     """A Run already judged by one Judge Setup cannot be judged by another."""
 
 
+class CalibrationError(ValueError):
+    """A Calibration Set change was refused: an unfinished Run, an Output already in the
+    set, an unknown item, or human scores that do not match its Criteria."""
+
+
+class CertificationFailed(CalibrationError):
+    """The Judge Setup's agreement with the human scores does not meet the thresholds,
+    or the Calibration Set is empty or not fully scored; nothing is logged."""
+
+
 class CandidateToolError(Exception):
     """An automated Candidate's tool errored: an API error, a timeout or no Output."""
 
@@ -130,3 +155,12 @@ class CandidateUnavailable(Exception):
 class MissingSecret(Exception):
     """A secret a Candidate needs is set neither in the environment nor in .env.
     Names the environment variable, never a value (ADR-0005)."""
+
+
+# Every refusal Workspace.compare can raise: an unknown or changed Run (LookupError,
+# RunMismatch), one not the Baseline's (ValueError), a Gate or Clearance no longer
+# held, an incomplete Run, different Suites, or Spot-checks left.
+COMPARISON_REFUSALS: tuple[type[Exception], ...] = (
+    ValueError, LookupError, GateNotPassed, ClearanceError, RunMismatch, RunIncomplete,
+    SuiteMismatch, SpotChecksUnfinished,
+)

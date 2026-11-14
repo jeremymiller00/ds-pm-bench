@@ -8,7 +8,7 @@ from textual.widgets import Select, Static, TabbedContent, Tabs, TextArea, Tree
 from bench import Workspace
 from bench.cli import main
 from bench.tui.app import BenchApp
-from bench.tui.task_editor import NewTaskScreen, TaskEditorScreen
+from bench.tui.task_editor import NewTaskScreen, PublicTwinScreen, TaskEditorScreen
 from test_workspace_candidates import write_candidate
 from test_workspace_runs import cleared
 
@@ -129,8 +129,7 @@ async def test_shell_opens_on_tasks_with_the_later_sections_as_placeholders(
         await pilot.click("#--content-tab-calibration")
         await pilot.pause()
         assert sections.active == "calibration"
-        placeholder = sections.query_one("#calibration Static", Static)
-        assert "not built yet" in str(placeholder.content)
+        assert sections.query_one("#calibration #cal-setup", Static)
 
 
 @pytest.mark.parametrize("args", [[], ["tui"]])
@@ -370,3 +369,43 @@ async def test_task_details_show_a_catalog_tasks_name_and_output_shape(
 
     assert "Name: Frame a vague product ask" in text
     assert "Output shape: AI Project Template" in text
+
+
+async def test_t_makes_a_public_twin_of_the_highlighted_private_task(
+    workspace_dir: Path, tmp_path: Path
+):
+    private = tmp_path / "private"
+    configure_private_root(workspace_dir, private)
+    write_task(private, "T1.2", input_text="Acme's real churn data.")
+
+    app = BenchApp(Workspace.open(workspace_dir))
+    async with app.run_test() as pilot:
+        await pilot.press("down")  # the private T1.2
+        await pilot.press("t")
+        await pilot.pause()
+        assert isinstance(app.screen, PublicTwinScreen)
+        fill(app, "#twin-id", "T1.2-example")
+        await pilot.press("ctrl+s")
+        await pilot.pause()
+        labels = tree_outline(app)["Framing (2)"]
+        status = str(app.query_one("#task-status", Static).content)
+
+    assert "T1.2-example  public  v1" in labels[1]
+    assert "T1.2-example created as a public twin of T1.2" in status
+    twin = Workspace.open(workspace_dir).task("T1.2-example")
+    assert "Acme" not in twin.input_path.read_text()
+
+
+async def test_a_public_task_gets_no_twin(workspace_dir: Path):
+    write_task(workspace_dir, "T1.1")
+    app = BenchApp(Workspace.open(workspace_dir))
+    async with app.run_test() as pilot:
+        await pilot.press("down")
+        await pilot.press("t")
+        await pilot.pause()
+        fill(app, "#twin-id", "T1.1-example")
+        await pilot.press("ctrl+s")
+        await pilot.pause()
+        error = str(app.screen.query_one("#twin-error", Static).content)
+
+    assert "already public" in error

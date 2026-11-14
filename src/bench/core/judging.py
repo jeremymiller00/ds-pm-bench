@@ -9,9 +9,9 @@ config/judge.yaml names the Judge Setup:
              the provider's tools in bench.core.provider_registry), and env_var: the
              variable holding its API key (default <PROVIDER>_API_KEY)
 
-Its identity is a content hash of its models and the prompt the Judge sees, so editing
-either makes a new Judge Setup. The Judge sees the input, the Rubric, the Gold Answer and
-the final Output, never which Candidate produced it.
+Its identity is a content hash of its mode, models and the prompt the Judge sees, so
+editing any of them makes a new Judge Setup. The Judge sees the input, the Rubric, the
+Gold Answer and the final Output, never which Candidate produced it.
 """
 
 from __future__ import annotations
@@ -25,13 +25,17 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from bench.core.errors import JudgeReplyError
+from bench.core.archive import archive_judge_prompt, content_hash
+from bench.core.errors import JudgeClearanceError, JudgeReplyError
 from bench.core.fields import FieldReader
-from bench.core.kinds import Clearance, JudgeMode, Provider
+from bench.core.kinds import Clearance, JudgeMode, Provider, Visibility
 from bench.core.provider_registry import family_of
 from bench.core.rubric import Criterion, check_criterion_score
+from bench.core.tasks import Task
 
 JUDGE_FILE = "config/judge.yaml"
+# The folder judge reasons go in, beside a Run's Outputs or the Calibration Set's content.
+JUDGE_FOLDER = "judge"
 JUDGE_FIELDS = ("mode", "clearance", "prompt", "models")
 MODEL_FIELDS = ("provider", "model", "family", "env_var")
 
@@ -69,8 +73,10 @@ class JudgeSetup:
 
     @property
     def hash(self) -> str:
-        """The identity: a content hash of the models and the prompt the Judge sees."""
+        """The identity: a content hash of the mode, the models and the prompt the
+        Judge sees. Clearance is not part of it: it is a permission, checked apart."""
         content = {
+            "mode": str(self.mode),
             "models": self._model_identities(),
             "prompt": self.prompt,
             "reply_format": REPLY_FORMAT,
@@ -78,17 +84,61 @@ class JudgeSetup:
         canonical = json.dumps(content, sort_keys=True, separators=(",", ":"))
         return hashlib.sha256(canonical.encode()).hexdigest()[:16]
 
+    @property
+    def prompt_hash(self) -> str:
+        """The judge prompt's content hash, its name in the archive (ADR-0003)."""
+        return content_hash(self.prompt)
+
     def snapshot(self) -> dict[str, Any]:
-        """What a Run records of the Judge Setup that scored it."""
+        """What a Run or a Certification records of the Judge Setup it used."""
         return {
             "hash": self.hash,
             "mode": str(self.mode),
             "models": self._model_identities(),
+            "prompt_hash": self.prompt_hash,
         }
 
     def _model_identities(self) -> list[dict[str, str]]:
         """The judge models as the hash and a Run's snapshot both record them."""
         return [{"provider": str(m.provider), "model": m.model} for m in self.models]
+
+
+@dataclass(frozen=True)
+class BlindOutput:
+    """An Output as a blind scorer sees it, human or Judge: the Canonical Prompt and
+    input, the Criteria to score, the Gold Answer and the final Output; never the Judge's
+    scores, the Run or the Candidate. id is the Task id in a Run, or the opaque item id
+    in the Calibration Set."""
+
+    id: str
+    input: str
+    criteria: tuple[Criterion, ...]
+    gold_answer: str
+    output: str
+
+
+def blind_output(
+    output_id: str, task: Task, output: str, criteria: tuple[Criterion, ...] | None = None
+) -> BlindOutput:
+    """The one builder of what a blind scorer sees of a Task's Output: the same text for
+    judging a Run, a Calibration Set item and a Spot-check. criteria defaults to the
+    Task's whole Rubric. The caller checks Clearance before calling."""
+    return BlindOutput(
+        id=output_id,
+        input=f"{task.canonical_prompt}\n\n{task.input_path.read_text().strip()}",
+        criteria=task.rubric.criteria if criteria is None else criteria,
+        gold_answer=task.gold_answer_path.read_text().strip(),
+        output=output,
+    )
+
+
+def check_judge_clearance(setup: JudgeSetup, visibility: Visibility, what: str) -> None:
+    """The one Private-Task Clearance check for judging: JudgeClearanceError for private
+    content and a Judge Setup not cleared for it (ADR-0006). what names the content."""
+    if visibility == Visibility.PRIVATE and setup.clearance != Clearance.PUBLIC_AND_PRIVATE:
+        raise JudgeClearanceError(
+            f"{what} is private and Judge Setup {setup.hash} is cleared for {setup.clearance}"
+        )
 
 
 @dataclass(frozen=True)
@@ -100,6 +150,11 @@ class JudgeRequest:
     criteria: tuple[Criterion, ...]  # the Rubric: shared then task-specific Criteria
     gold_answer: str
     output: str  # the edited final Output
+
+    @classmethod
+    def for_output(cls, prompt: str, blind: BlindOutput) -> JudgeRequest:
+        return cls(prompt=prompt, input=blind.input, criteria=blind.criteria,
+                   gold_answer=blind.gold_answer, output=blind.output)
 
     def render(self) -> str:
         """The whole request as one text, for a model taking a single message."""
@@ -122,10 +177,10 @@ class CriterionJudgement:
 
 @dataclass(frozen=True)
 class TaskJudging:
-    """One Task's judging by a Judge Setup: every judge model's scores and reasons, and
-    the median per Criterion that becomes the Task's Criterion scores."""
+    """One Output's judging by a Judge Setup: every judge model's scores and reasons, and
+    the median per Criterion that becomes its Criterion scores."""
 
-    task_id: str
+    output_id: str  # BlindOutput.id: the Task id in a Run, the item id in the Calibration Set
     judges: Mapping[str, Mapping[str, CriterionJudgement]]  # label -> Criterion -> it
     same_family: bool  # a judge model shares the Candidate's family
 
@@ -161,7 +216,40 @@ def load_judge_setup(root: Path) -> JudgeSetup | None:
     if not (root / JUDGE_FILE).is_file():
         return None
     f = FieldReader(JUDGE_FILE)
-    data = f.read(root)
+    return _parse(f, root, f.read(root), prompt=None)
+
+
+def edit_judge_setup(
+    root: Path, changes: Mapping[str, Any], prompt: str | None = None
+) -> JudgeSetup:
+    """Apply changes (mode, clearance, prompt: the prompt file's path, models) to
+    config/judge.yaml, starting from an empty one when it is absent, and write it back;
+    prompt, if given, is the prompt file's new text. Everything is validated before
+    anything is written: an invalid change raises ConfigError naming the field."""
+    f = FieldReader(JUDGE_FILE)
+    data = f.read(root) if (root / JUDGE_FILE).is_file() else {}
+    for key in changes:
+        if key not in JUDGE_FIELDS:
+            raise f.fail(key, f"unknown, expected one of {', '.join(JUDGE_FIELDS)}")
+    data = {**data, **changes}
+    setup = _parse(f, root, data, prompt=prompt)
+    if prompt is not None:
+        path = (root / setup.prompt_file).resolve()
+        if not path.is_relative_to(root.resolve()):
+            raise f.fail("prompt", f"{setup.prompt_file} is outside the Workspace root")
+        if path.is_file():  # keep the text being replaced (ADR-0003)
+            archive_judge_prompt(root, path.read_text())
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(prompt)
+    f.write(root, data)
+    return setup
+
+
+def _parse(
+    f: FieldReader, root: Path, data: dict[str, Any], *, prompt: str | None
+) -> JudgeSetup:
+    """The Judge Setup data describes; prompt, when given, is the prompt file's text to
+    be, else the file is read."""
     f.exact_keys(data, "(file)", JUDGE_FIELDS)
     mode = f.enum(data["mode"], "mode", JudgeMode)
     raw_models = data["models"]
@@ -177,10 +265,11 @@ def load_judge_setup(root: Path) -> JudgeSetup | None:
         if label in labels[:i]:
             raise f.fail(f"models[{i}]", f"duplicate model {label}")
     prompt_file = f.text(data["prompt"], "prompt")
-    path = root / prompt_file
-    if not path.is_file():
-        raise f.fail("prompt", f"file {prompt_file} does not exist")
-    prompt = path.read_text()
+    if prompt is None:
+        path = root / prompt_file
+        if not path.is_file():
+            raise f.fail("prompt", f"file {prompt_file} does not exist")
+        prompt = path.read_text()
     if not prompt.strip():
         raise f.fail("prompt", f"file {prompt_file} is empty")
     return JudgeSetup(

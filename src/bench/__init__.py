@@ -13,12 +13,20 @@ from bench.core.adapters import (
 )
 from bench.core.attempts import Attempt
 from bench.core.automated import ReturnedOutput
+from bench.core.calibration import (
+    Agreement,
+    CalibrationItem,
+    CriterionAgreement,
+)
 from bench.core.errors import (
     AttemptError,
+    CalibrationError,
     CandidateAuthoringError,
     CandidateToolError,
     CandidateUnavailable,
+    CertificationFailed,
     ClearanceError,
+    ConfigEditRefused,
     ConfigError,
     EditorError,
     GateNotPassed,
@@ -34,6 +42,8 @@ from bench.core.errors import (
     RunIncomplete,
     RunMismatch,
     RunNotFinished,
+    SpotCheckError,
+    SpotChecksUnfinished,
     SuiteMismatch,
     SuiteUnavailable,
     TaskAuthoringError,
@@ -44,6 +54,7 @@ from bench.core.errors import (
     UnknownTaskError,
 )
 from bench.core.judging import (
+    BlindOutput,
     JudgeModelSpec,
     JudgeRequest,
     JudgeSetup,
@@ -56,16 +67,23 @@ from bench.core.workspace import Workspace
 
 __all__ = [
     "AdapterFactory",
+    "Agreement",
     "Attempt",
     "AttemptError",
+    "BlindOutput",
+    "CalibrationError",
+    "CalibrationItem",
     "CandidateAdapter",
     "CandidateAuthoringError",
     "CandidateReply",
     "CandidateToolError",
     "CandidateUnavailable",
+    "CertificationFailed",
     "Clock",
     "Comparison",
+    "CriterionAgreement",
     "ClearanceError",
+    "ConfigEditRefused",
     "ConfigError",
     "Editor",
     "EditorError",
@@ -89,6 +107,8 @@ __all__ = [
     "RunIncomplete",
     "RunMismatch",
     "RunNotFinished",
+    "SpotCheckError",
+    "SpotChecksUnfinished",
     "RunScore",
     "SuiteMismatch",
     "SystemClock",

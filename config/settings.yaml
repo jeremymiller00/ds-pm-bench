@@ -24,6 +24,7 @@ spot_check_rate: 0.25
 calibration:
   within_one_point: 0.9   # share of scores within 1 point of the human score
   weighted_kappa: 0.6     # minimum weighted kappa per Criterion
+  min_items: 12           # fewest fully scored items a Certification is made on
 
 # Normalization bands: how a raw measure maps to a 1-5 Dimension score.
 # Four ascending thresholds split the range into five bands.

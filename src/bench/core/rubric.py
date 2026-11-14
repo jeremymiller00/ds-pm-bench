@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -52,6 +53,21 @@ def load_rubric(root: Path) -> Rubric:
     return Rubric(criteria=parse_criteria(f, f.read(root).get("criteria"), "criteria"))
 
 
+def parse_rubric_edit(criteria: Any) -> Rubric:
+    """The shared Rubric criteria would make, validated as on load (ConfigError naming
+    the field); nothing is written."""
+    f = FieldReader(RUBRIC_FILE)
+    entries = plain_list(criteria)
+    return Rubric(criteria=parse_criteria(f, entries, "criteria"))
+
+
+def write_rubric(root: Path, rubric: Rubric) -> None:
+    """Write the shared Rubric back, keeping the file's comments (ADR-0001)."""
+    FieldReader(RUBRIC_FILE).write(
+        root, {"criteria": [criterion_dict(c) for c in rubric.criteria]}
+    )
+
+
 def parse_criteria(f: FieldReader, value: Any, field: str) -> tuple[Criterion, ...]:
     """Parse a non-empty list of Criteria with unique ids. Reused by task rubrics."""
     if not isinstance(value, list) or not value:
@@ -73,3 +89,11 @@ def parse_criteria(f: FieldReader, value: Any, field: str) -> tuple[Criterion, .
             )
         )
     return tuple(criteria)
+
+
+def plain_list(value: Any) -> Any:
+    """A list of mappings as plain dicts, for validation; anything else as it is, so
+    validation refuses it naming the field."""
+    if not isinstance(value, (list, tuple)):
+        return value
+    return [dict(v) if isinstance(v, Mapping) else v for v in value]

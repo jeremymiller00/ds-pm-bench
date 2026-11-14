@@ -23,6 +23,11 @@ workspace needs `config/`, Tasks under `tasks/` or `examples/`, and Candidates u
 `candidates/` with exactly one marked `baseline: true`. Each Task's `track` must be
 one of the `tracks` listed in `config/settings.yaml`.
 
+A pre-commit hook (`scripts/check_public_tasks.py`, a `repo: local` hook) warns,
+without blocking, when a staged Public Task's input or Gold Answer holds an email address
+or matches a `public_denylist` pattern (case-insensitive regular expressions) in the
+git-ignored `config/local.yaml`; install the hooks once with `uvx pre-commit install`.
+
 Private Tasks (ADR 0006) are read from private roots listed in `config/local.yaml`,
 which is git-ignored because the paths are machine-specific. Copy
 `config/local.example.yaml` to start; without it no Private Tasks load.
@@ -69,6 +74,10 @@ BENCH_LIVE=1 OPENAI_API_KEY=... uv run pytest -m live  # also judges examples/ o
 
 In the TUI's Tasks tab, `e` edits the highlighted Task and `n` scaffolds a new one
 (private only when a private root is configured); `ctrl+s` saves, `escape` cancels.
+`t` on a Private Task makes its public synthetic twin
+(`Workspace.create_public_twin(private_id, new_id)`): a Public Task with the same name,
+Track, Trap, Output Shape and task Criteria, and placeholders for everything that could
+quote the private content (input, Gold Answer, Canonical Prompt) and for Manual Time.
 Saving shows the Task's version, and whether the edit made a new one because a Run
 used the old (ADR 0003). Validation errors appear inline in the form.
 
@@ -146,6 +155,20 @@ Records a human's 1-5 score for one Criterion the Judge already scored, and prin
 how far apart they are. A Comparison re-tests when any Spot-check on either Run is
 more than 1 point from the Judge.
 
+Once a Run is fully judged by a Judge Setup it gets a Spot-check queue
+(`Run.spot_check_queue`, saved in `run.yaml`): `spot_check_rate` of its Tasks (3 of 12),
+sampled reproducibly from the Run id, taking first the Tracks the same Candidate's
+previous Run did not queue, so every Track is checked across two Runs. "Previous" is
+the order Runs were started (`started` in `run.yaml`), not their dates, so a Run dated
+the same day or earlier still counts. Tasks marked for a
+full human check (a same-family judge model, a panel disagreement) are always queued, so
+a same-family Candidate gets every Task. `Run.spot_checks_left` lists each queued Task's
+Criteria with no human score yet, without the Judge's scores, so the check stays blind.
+A Comparison refuses (`SpotChecksUnfinished`) while either Run has any left: a Verdict is
+never computed on unchecked judging. Runs scored from results files (Criterion scores a
+human wrote in `criterion_scores`) are never judged, so they get no queue and need none:
+their scores are already human scores, and `bench spot-check` can still record extra checks.
+
 ### 4. Reach a Verdict
 
 ```sh
@@ -182,13 +205,61 @@ models:
 
 Each judge model is asked for JSON in its provider's structured-output mode (a JSON Schema
 naming every Criterion). The key's `env_var` is not part of the hash.
-Its hash covers the models and the prompt, so editing either is a new Judge Setup.
-`Workspace.judge_run(run, allow_uncertified=True)` scores every unscored Output of a
-finished Run blind; until certification lands every Judge Setup is uncertified, so the
-override is required, and it is logged to the Decision Log once a Task is judged (once
-per Run and Judge Setup). A judge model that is the model the Candidate calls (same
+Its hash covers the mode, the models and the prompt, so editing any of them is a new
+Judge Setup.
+`Workspace.judge_run(run)` scores every unscored Output of a finished Run blind with a
+certified Judge Setup; an uncertified one needs `allow_uncertified=True`, and that
+override is logged to the Decision Log once a Task is judged (once per Run and Judge
+Setup). A judge model that is the model the Candidate calls (same
 provider and model id) is refused, and a same-family judge model marks Tasks for a full
 human check. Every refusal is a `JudgingError`.
+
+### Archived judge prompts and Rubrics
+
+Before the judge prompt or the shared Rubric is replaced, and whenever a Run, a
+Calibration judging or a Certification uses one, its text is kept under its content
+hash in `config/archive/judge-prompts/` and `config/archive/rubrics/` (ADR 0003). A
+Run records `rubric_hash` and its Judge Setup's `prompt_hash`, and a Certification
+both, so `Workspace.run_rubric(run)` and `run_judge_prompt(run)` rebuild what scored a
+past Run from the repo alone, committed or not. A Run keeps scoring on the Rubric it
+started with. `Workspace.update_rubric(criteria)` adds, edits or removes shared
+Criteria (also in the TUI's Settings tab), refusing a change that would leave a Task
+invalid, such as a shared Criterion a Task already defines.
+
+### Calibration and Certification
+
+The Calibration Set (`calibration/`) holds final Outputs of finished Runs, Spot-checked
+or not: `Workspace.add_calibration_item(run_id, task_id)`. The public
+`calibration/<item>.yaml` keeps numbers only (Run, Task, version, Criterion ids, human
+scores, each Judge Setup's median scores by hash); the input, Gold Answer, Rubric text,
+Output and Judge reasons go to `calibration/content/` and `calibration/judge/` in the
+public repo, or in the private root for a Private Task. Item ids (`c0001`) are opaque.
+
+`unscored_calibration_items()` gives what a human scores blind (content only, no Judge
+scores, Run or Candidate) and `score_calibration_item(item_id, scores)` records a whole
+1-5 score per Criterion. `judge_calibration_set()` has the current Judge Setup score every
+item it has not, and `calibration_agreement()` reports per Criterion (and pooled) the
+share within 1 point and the quadratic weighted kappa. `certify_judge()` needs every item
+scored by both, at least `calibration.min_items` of them (default 12), and every
+Criterion at or above `calibration.within_one_point` and
+`calibration.weighted_kappa` in settings (a Criterion whose kappa is undefined because
+both always gave the same score is held to the first only); it logs a
+`judge_certification` entry to the Decision Log, or raises `CertificationFailed` naming
+each shortfall. A Certification belongs to one Judge Setup hash and one Clearance
+(ADR 0002): `judge_certified` reads the log for the current hash and Clearance, so an
+edited mode, judge model or prompt is uncertified until certified again, and widening
+the Clearance to `public_and_private` drops it.
+
+From the command line (thin over the same Workspace calls):
+
+```sh
+bench judge 2026-11-13-other@1 [--allow-uncertified]   # judge_run; the override is logged
+bench calibrate add 2026-11-13-other@1 T1.1-example    # add_calibration_item
+bench calibrate status                                  # calibration_agreement
+bench calibrate certify [--on 2026-11-13]               # certify_judge
+```
+
+Human scoring stays in the TUI's Calibration tab, where it is blind.
 
 ### Golden fixtures
 

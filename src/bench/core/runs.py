@@ -1,8 +1,10 @@
 """Runs: one Candidate against a Suite of Tasks on one date (ADR-0003, ADR-0006).
 
 runs/<date>-<candidate>/ in the public repo holds:
-  run.yaml              the snapshot: Candidate, Task versions, date, Suite, and the
-                        Tasks left out of the Suite as placeholders (excluded)
+  run.yaml              the snapshot: Candidate, Task versions, date, Suite, the
+                        shared Rubric's hash (rubric_hash), the
+                        Tasks left out of the Suite as placeholders (excluded), and
+                        started: the Run's place in the order Runs were started
   results/<task>.yaml   numbers only per Task (timings, cost, Edit Distance, Criterion
                         scores, Spot-check human scores), with the Task's visibility
   raw/<task>.md         raw Output       } Public Tasks only; for a Private Task these
@@ -16,12 +18,13 @@ from __future__ import annotations
 
 import datetime
 from collections.abc import Mapping
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
 import yaml
 
+from bench.core.archive import archived_rubric, rubric_hash
 from bench.core.candidates import Candidate
 from bench.core.errors import (
     ClearanceError,
@@ -30,22 +33,24 @@ from bench.core.errors import (
     RunExists,
     RunIncomplete,
     RunMismatch,
+    SpotCheckError,
     SuiteUnavailable,
     UnknownRunError,
     UnknownTaskError,
 )
 from bench.core.fields import FieldReader
-from bench.core.judging import JudgeSetup, TaskJudging
+from bench.core.judging import JUDGE_FOLDER, JudgeSetup, TaskJudging
 from bench.core.kinds import Clearance, Suite, Visibility
 from bench.core.lookup import find_by_id
 from bench.core.results import TaskResult
-from bench.core.rubric import check_criterion_score
+from bench.core.rubric import Rubric, check_criterion_score
 from bench.core.tasks import Task, TaskContext, load_version
 
 RUNS_FOLDER = "runs"
 RUN_FILE = "run.yaml"
 RESULTS_FOLDER = "results"
-JUDGE_FOLDER = "judge"
+# run.yaml key: the Spot-check queue, Task id -> Track, saved once the Run is judged.
+SPOT_CHECK_QUEUE = "spot_check_queue"
 
 # What a results file (the input to record_from_file) may hold.
 RESULTS_FILE_FIELDS = (
@@ -70,6 +75,9 @@ class Run:
     # Task id -> what is a placeholder ("input", "Gold Answer", "Manual Time",
     # "Canonical Prompt").
     excluded: Mapping[str, tuple[str, ...]] = field(default_factory=dict)
+    # Its place in the order Runs were started (1 for the first); 0 for a Run made
+    # before the order was recorded, which counts as started before every other.
+    started: int = 0
 
     @property
     def candidate_id(self) -> str:
@@ -167,6 +175,17 @@ class Run:
         self._write_task_record(task.id, task_record)
 
     @property
+    def rubric_hash(self) -> str | None:
+        """The hash of the shared Rubric the Run was started on (ADR-0003); None for a
+        Run started before it was recorded."""
+        return self._snapshot().get("rubric_hash")
+
+    @property
+    def judge_prompt_hash(self) -> str | None:
+        """The hash of the judge prompt that scored this Run; None until it is judged."""
+        return (self._snapshot().get("judge_setup") or {}).get("prompt_hash")
+
+    @property
     def judge_setup_hash(self) -> str | None:
         """The hash of the Judge Setup that scored this Run; None until it is judged."""
         return (self._snapshot().get("judge_setup") or {}).get("hash")
@@ -204,7 +223,7 @@ class Run:
         self.check_judge_setup(setup)
         snapshot = self._snapshot()
         recorded = snapshot.get("judge_setup")
-        task = self.task(judging.task_id)
+        task = self.task(judging.output_id)
         self.record_criterion_scores(task.id, judging.scores)
         if recorded is None:
             snapshot["judge_setup"] = setup.snapshot()
@@ -296,14 +315,11 @@ class Run:
         """Record a human's 1-5 score of one Criterion the Judge already scored.
 
         Recording the same Task and Criterion again replaces the earlier human score.
+        A refused score raises SpotCheckError and records nothing.
         """
         task = self.task(task_id)
+        self.check_spot_check(task.id, criterion, human_score)
         task_record = self._task_record(task.id)
-        if task_record is None or "criterion_scores" not in task_record:
-            raise ValueError(f"Run {self.id}: Task {task.id} has no Criterion scores to check")
-        if criterion not in task_record["criterion_scores"]:
-            raise ValueError(f"Task {task.id}: {criterion!r} is not a Criterion of its Rubric")
-        check_criterion_score(human_score, f"Task {task.id}: Spot-check {criterion}")
         task_record.setdefault("spot_checks", {})[criterion] = human_score
         self._write_task_record(task.id, task_record)
         return SpotCheck(
@@ -313,6 +329,46 @@ class Run:
             judge_score=task_record["criterion_scores"][criterion],
             human_score=human_score,
         )
+
+    def check_spot_check(self, task_id: str, criterion: str, human_score: Any) -> None:
+        """SpotCheckError unless the score could be recorded as a Spot-check."""
+        task = self.task(task_id)
+        task_record = self._task_record(task.id)
+        if task_record is None or "criterion_scores" not in task_record:
+            raise SpotCheckError(f"Run {self.id}: Task {task.id} has no Criterion scores to check")
+        if criterion not in task_record["criterion_scores"]:
+            raise SpotCheckError(f"Task {task.id}: {criterion!r} is not a Criterion of its Rubric")
+        try:
+            check_criterion_score(human_score, f"Task {task.id}: Spot-check {criterion}")
+        except ValueError as exc:
+            raise SpotCheckError(str(exc)) from None
+
+    @property
+    def spot_check_queue(self) -> tuple[str, ...]:
+        """Task ids queued for a human Spot-check, in Suite order; empty until judged."""
+        return tuple(self._snapshot().get(SPOT_CHECK_QUEUE) or {})
+
+    def queue_spot_checks(self, task_ids: tuple[str, ...]) -> None:
+        """Save the Spot-check queue with each Task's Track. Set once: a Run that already
+        has one keeps it, so the queue is never resampled."""
+        snapshot = self._snapshot()
+        if snapshot.get(SPOT_CHECK_QUEUE) is not None:
+            return
+        snapshot[SPOT_CHECK_QUEUE] = {t: self.task(t).track for t in task_ids}
+        self._write_snapshot(snapshot)
+
+    @property
+    def spot_checks_left(self) -> dict[str, tuple[str, ...]]:
+        """Queued Task id -> the Criteria a human has not scored yet, for Tasks with any
+        left. Blind: holds no Judge scores."""
+        left = {}
+        for task_id in self.spot_check_queue:
+            task = self.task(task_id)
+            checked = (self._task_record(task_id) or {}).get("spot_checks", {})
+            criteria = tuple(c.id for c in task.rubric.criteria if c.id not in checked)
+            if criteria:
+                left[task_id] = criteria
+        return left
 
     @property
     def spot_checks(self) -> tuple[SpotCheck, ...]:
@@ -452,6 +508,11 @@ def _load_yaml(f: FieldReader, path: Path) -> Any:
         raise f.fail("(file)", f"is not valid YAML: {exc}") from exc
 
 
+def _queued_tracks(snapshot: Mapping[str, Any]) -> frozenset[str] | None:
+    queue = snapshot.get(SPOT_CHECK_QUEUE)
+    return None if queue is None else frozenset(queue.values())
+
+
 def run_id_for(candidate: Candidate, date: datetime.date) -> str:
     return f"{date.isoformat()}-{candidate.id}"
 
@@ -522,6 +583,7 @@ def create_run(
     suite: Suite,
     tasks: tuple[Task, ...],
     date: datetime.date,
+    rubric_hash: str,
 ) -> Run:
     check_gate(candidate)
     for task in tasks:
@@ -530,6 +592,7 @@ def create_run(
     run_id = run_id_for(candidate, date)
     if (workspace_root / RUNS_FOLDER / run_id).exists():
         raise RunExists(f"Run {run_id} already exists; resume it instead")
+    started = 1 + max((s.get("started", 0) for s in _snapshots(workspace_root)), default=0)
     run = Run(
         id=run_id,
         candidate=candidate,
@@ -538,9 +601,11 @@ def create_run(
         tasks=runnable,
         folder=workspace_root / RUNS_FOLDER / run_id,
         excluded={t.id: t.placeholders for t in tasks if t.placeholders},
+        started=started,
     )
     run.folder.mkdir(parents=True)
-    (run.folder / RUN_FILE).write_text(yaml.safe_dump(_snapshot(run), sort_keys=False))
+    snapshot = {**_snapshot(run), "rubric_hash": rubric_hash}
+    (run.folder / RUN_FILE).write_text(yaml.safe_dump(snapshot, sort_keys=False))
     return run
 
 
@@ -552,6 +617,7 @@ def _snapshot(run: Run) -> dict[str, Any]:
         "candidate": _candidate_snapshot(run.candidate),
         "tasks": run.task_versions,
         "excluded": {task_id: list(missing) for task_id, missing in run.excluded.items()},
+        "started": run.started,
     }
 
 
@@ -583,6 +649,32 @@ def list_run_ids(workspace_root: Path) -> tuple[str, ...]:
     return tuple(sorted((p.parent.name for p in paths), reverse=True))
 
 
+def _snapshots(workspace_root: Path) -> list[dict[str, Any]]:
+    return [
+        yaml.safe_load(path.read_text()) or {}
+        for path in (workspace_root / RUNS_FOLDER).glob(f"*/{RUN_FILE}")
+    ]
+
+
+def tracks_spot_checked_before(workspace_root: Path, run: Run) -> frozenset[str]:
+    """The Tracks queued for a Spot-check in the same Candidate's previous Run: the
+    latest one with a queue started before this one, whatever their dates (Run.started;
+    Runs from before the order was recorded fall back to their dates). Empty when there
+    is none."""
+    def order(snapshot: Mapping[str, Any]) -> tuple[int, str, str]:
+        return snapshot.get("started", 0), snapshot.get("date", ""), snapshot.get("id", "")
+
+    this = (run.started, run.date.isoformat(), run.id)
+    earlier = [
+        s for s in _snapshots(workspace_root)
+        if (s.get("candidate") or {}).get("id") == run.candidate_id
+        and order(s) < this
+        and _queued_tracks(s) is not None
+    ]
+    latest = max(earlier, key=order, default=None)
+    return frozenset() if latest is None else _queued_tracks(latest)
+
+
 def task_versions_used(workspace_root: Path) -> set[tuple[str, int]]:
     """Every (Task id, version) some Run's snapshot holds; frozen per ADR-0003."""
     used: set[tuple[str, int]] = set()
@@ -590,6 +682,17 @@ def task_versions_used(workspace_root: Path) -> set[tuple[str, int]]:
         snapshot = yaml.safe_load(path.read_text()) or {}
         used.update((task_id, v) for task_id, v in (snapshot.get("tasks") or {}).items())
     return used
+
+
+def _shared_rubric(ctx: TaskContext, run_id: str, digest: str | None) -> Rubric | None:
+    """The archived shared Rubric a Run started on, when it differs from the current
+    one; None when it is the current one or was not recorded."""
+    if digest is None or digest == rubric_hash(ctx.shared):
+        return None
+    archived = archived_rubric(ctx.workspace_root, digest)
+    if archived is None:
+        raise RunMismatch(f"Run {run_id} used shared Rubric {digest}, which is not archived")
+    return archived
 
 
 def open_run(
@@ -602,11 +705,14 @@ def open_run(
 
     A Task since bumped is loaded at the version the Run used, from its archive. A Run
     still unfinished is refused instead: it must finish on the versions it started with.
+    Its Tasks' Rubrics use the shared Rubric it was started on, from the archive when
+    the Rubric has changed since.
     """
     folder = ctx.workspace_root / RUNS_FOLDER / run_id
     if not (folder / RUN_FILE).is_file():
         raise UnknownRunError(f"no Run {run_id!r} in {RUNS_FOLDER}/")
     snapshot = yaml.safe_load((folder / RUN_FILE).read_text())
+    shared = _shared_rubric(ctx, run_id, snapshot.get("rubric_hash"))
     snapped = snapshot["candidate"]
     candidate = candidates.get(snapped["id"])
     if candidate is None or _candidate_snapshot(candidate) != snapped:
@@ -626,6 +732,8 @@ def open_run(
         if used is not task:
             bumped.append(f"Task {task_id} version {version} is now version {task.version}")
         check_clearance(candidate, used)
+        if shared is not None:
+            used = replace(used, rubric=Rubric(criteria=shared.criteria + used.own_criteria))
         tasks.append(used)
     run = Run(
         id=run_id,
@@ -638,6 +746,7 @@ def open_run(
             task_id: tuple(missing)
             for task_id, missing in snapshot.get("excluded", {}).items()
         },
+        started=snapshot.get("started", 0),
     )
     if bumped and not run.complete:
         raise RunMismatch(

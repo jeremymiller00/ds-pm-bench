@@ -200,3 +200,43 @@ def parse_criteria(text: str) -> Any:
     if not isinstance(criteria, list) or not all(isinstance(c, dict) for c in criteria):
         raise FormError("Criteria: must be a YAML list of id, name, description entries")
     return criteria
+
+
+class PublicTwinScreen(ModalScreen[Task | None]):
+    """Name the public synthetic twin of a Private Task (story 79); the Workspace copies
+    its shape and none of its content. Dismisses with the twin, or None when cancelled."""
+
+    DEFAULT_CSS = EDITOR_CSS + "PublicTwinScreen .editor-form { height: auto; }"
+    BINDINGS = [
+        Binding("ctrl+s", "save", "Create twin", priority=True),
+        Binding("escape", "cancel", "Cancel"),
+    ]
+
+    def __init__(self, workspace: Workspace, task_id: str) -> None:
+        super().__init__()
+        self.workspace = workspace
+        self.task_id = task_id
+
+    def compose(self) -> ComposeResult:
+        with VerticalScroll(classes="editor-form"):
+            yield Static(
+                f"Public twin of {self.task_id}: copies its name, Track, Trap, Output "
+                "Shape and Criteria, never its input, Gold Answer or Canonical Prompt. "
+                "ctrl+s creates, escape cancels.",
+                markup=False,
+            )
+            yield Label("New Task id, such as T1.2-example")
+            yield Input(f"{self.task_id}-example", id="twin-id")
+            yield Static("", id="twin-error", classes="form-error", markup=False)
+
+    def action_save(self) -> None:
+        new_id = self.query_one("#twin-id", Input).value.strip()
+        try:
+            twin = self.workspace.create_public_twin(self.task_id, new_id)
+        except AUTHORING_ERRORS as error:
+            self.query_one("#twin-error", Static).update(str(error))
+            return
+        self.dismiss(twin)
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)

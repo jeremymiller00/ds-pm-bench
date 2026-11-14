@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import datetime
 import shutil
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -19,8 +19,15 @@ from bench.core.adapters import (
     JudgeModels,
     SystemClock,
 )
+from bench.core.archive import (
+    archive_judge_prompt,
+    archive_rubric,
+    archived_judge_prompt,
+    archived_rubric,
+)
 from bench.core.attempts import Attempt
 from bench.core.automated import ReturnedOutput, load_returned, run_task
+from bench.core.calibration import Agreement, CalibrationItem, CalibrationSet
 from bench.core.candidates import (
     CANDIDATES_FOLDER,
     Candidate,
@@ -36,13 +43,22 @@ from bench.core.candidates import (
     write_candidate,
 )
 from bench.core.catalog import CATALOG
-from bench.core.decisions import log_override, log_verdict, override_logged, read_log
+from bench.core.decisions import (
+    certified,
+    log_certification,
+    log_override,
+    log_verdict,
+    override_logged,
+    read_log,
+)
 from bench.core.errors import (
     AttemptError,
     CandidateAuthoringError,
     CandidateUnavailable,
+    CertificationFailed,
+    ConfigEditRefused,
+    ConfigError,
     GateNotPassed,
-    JudgeClearanceError,
     JudgeNotCertified,
     JudgeRefused,
     JudgeUnavailable,
@@ -55,10 +71,14 @@ from bench.core.errors import (
 )
 from bench.core.judging import (
     JUDGE_FILE,
+    BlindOutput,
     JudgeModelSpec,
     JudgeRequest,
     JudgeSetup,
     TaskJudging,
+    blind_output,
+    check_judge_clearance,
+    edit_judge_setup,
     is_candidate_under_test,
     load_judge_setup,
     parse_reply,
@@ -67,11 +87,20 @@ from bench.core.judging import (
 from bench.core.kinds import AdapterKind, Clearance, Suite, Visibility
 from bench.core.lookup import find_by_id
 from bench.core.manual_time import ManualTimeStopwatch
-from bench.core.prices import PriceTable, load_prices
+from bench.core.prices import PriceTable, load_prices, remove_price, set_price
 from bench.core.results import TaskResult
-from bench.core.rubric import Rubric, load_rubric
+from bench.core.rubric import (
+    RUBRIC_FILE,
+    Rubric,
+    criterion_dict,
+    load_rubric,
+    parse_rubric_edit,
+    plain_list,
+    write_rubric,
+)
 from bench.core.runs import (
     Run,
+    SpotCheck,
     candidate_ids_used,
     check_clearance,
     check_gate,
@@ -82,16 +111,20 @@ from bench.core.runs import (
     suites_for,
     task_versions_used,
     tasks_in,
+    tracks_spot_checked_before,
 )
 from bench.core.scoring import RunScore, score_run
-from bench.core.settings import SETTINGS_FILE, Settings, load_settings
+from bench.core.settings import SETTINGS_FILE, Settings, edit_settings, load_settings
+from bench.core.spot_checks import spot_check_queue
 from bench.core.tasks import (
+    PLACEHOLDER,
     CriterionSpec,
     Task,
     TaskContext,
     TaskRoot,
     edit_task,
     load_tasks,
+    load_version,
     scaffold_task,
 )
 from bench.core.verdicts import Comparison, Verdict, compare, gate_verdict
@@ -208,6 +241,30 @@ class Workspace:
         )
         self._reload_tasks()
         return task
+
+    def create_public_twin(self, private_task_id: str, new_id: str) -> Task:
+        """Scaffold a Public Task as the synthetic twin of a Private Task (story 79).
+
+        It copies only the shape: name, Track, Trap, Output Shape and task-specific
+        Criteria. Nothing that could quote the private content is copied: the input,
+        Gold Answer and Canonical Prompt start as placeholders, as does the Manual Time,
+        for the PM to write synthetic ones. A Public Task, or a taken id, raises
+        TaskAuthoringError and nothing is written.
+        """
+        source = self.task(private_task_id)
+        if source.visibility != Visibility.PRIVATE:
+            raise TaskAuthoringError(
+                f"Task {source.id} is already public; a twin is made of a Private Task"
+            )
+        return self.create_task(
+            new_id,
+            track=source.track,
+            trap=source.trap,
+            canonical_prompt=PLACEHOLDER,
+            criteria=[criterion_dict(c) for c in source.own_criteria],
+            name=source.name,
+            output_shape=source.output_shape,
+        )
 
     def update_task(self, task_id: str, **changes: Any) -> Task:
         """Edit a Task's fields: name, track, trap, output_shape, canonical_prompt,
@@ -506,7 +563,8 @@ class Workspace:
         check_gate(candidate)
         chosen = choose_suite(candidate, suite, self.tasks)
         tasks = tasks_in(chosen, self.tasks)
-        return create_run(self.root, candidate, chosen, tasks, on or self.clock.today())
+        return create_run(self.root, candidate, chosen, tasks, on or self.clock.today(),
+                          archive_rubric(self.root, self.rubric))
 
     def task_input(self, run: Run, task_id: str) -> str:
         """The Canonical Prompt and input of a Task in the Run's Suite.
@@ -618,29 +676,31 @@ class Workspace:
         Every refusal is a JudgingError, raised before any judge model is called: a Run
         with pending Tasks (RunNotFinished); no Judge Setup, or a judge model that
         cannot be made, its API key missing included (JudgeUnavailable); an uncertified
-        Judge Setup without allow_uncertified (JudgeNotCertified; Certification arrives
-        in slice 5); a Run already judged by another Judge Setup (JudgeSetupMismatch); a
-        judge model that is the model the Candidate calls (JudgeRefused); a Private Task
-        to a Judge Setup without private Clearance (JudgeClearanceError).
+        Judge Setup without allow_uncertified (JudgeNotCertified); a Run already judged
+        by another Judge Setup (JudgeSetupMismatch); a judge model that is the model the
+        Candidate calls (JudgeRefused); a Private Task to a Judge Setup without private
+        Clearance (JudgeClearanceError). A certified Judge Setup (certify_judge) needs no
+        override and logs none.
 
-        The uncertified override is appended to the Decision Log once the first Task is
-        judged, and only once per Run and Judge Setup, so a resumed judging logs nothing
-        new. A malformed reply raises JudgeReplyError; Tasks judged before it stay
-        recorded, so judging again resumes. A same-family judge model marks every Task
-        for a full human check.
+        For an uncertified Judge Setup the override is appended to the Decision Log once
+        the first Task is judged, and only once per Run and Judge Setup, so a resumed
+        judging logs nothing new. A malformed reply raises JudgeReplyError; Tasks judged
+        before it stay recorded, so judging again resumes. A same-family judge model
+        marks every Task for a full human check. Once every Task is judged, the Run's
+        Spot-check queue is sampled (bench.core.spot_checks), once.
         """
-        setup = self.judge_setup
-        if setup is None:
-            raise JudgeUnavailable(f"no Judge Setup: {JUDGE_FILE} is missing")
+        setup = self._require_judge_setup()
         if run.pending:
             raise RunNotFinished(
                 f"Run {run.id} is not finished: {', '.join(run.pending)} still pending; "
                 "judge it once every Task's Output is recorded"
             )
-        if not allow_uncertified:
+        is_certified = certified(self.root, setup)
+        if not is_certified and not allow_uncertified:
             raise JudgeNotCertified(
-                f"Judge Setup {setup.hash} is not certified; pass allow_uncertified=True "
-                "to judge anyway, which is logged to the Decision Log"
+                f"Judge Setup {setup.hash} is not certified; recalibrate it on the "
+                "Calibration Set and certify it, or pass allow_uncertified=True to judge "
+                "anyway, which is logged to the Decision Log"
             )
         run.check_judge_setup(setup)
         candidate = run.candidate
@@ -653,40 +713,160 @@ class Workspace:
                 )
         tasks = [run.task(task_id) for task_id in run.unjudged]
         for task in tasks:  # before any content is read
-            if task.visibility == Visibility.PRIVATE and (
-                setup.clearance != Clearance.PUBLIC_AND_PRIVATE
-            ):
-                raise JudgeClearanceError(
-                    f"Task {task.id} is private and Judge Setup {setup.hash} is cleared "
-                    f"for {setup.clearance}"
-                )
+            check_judge_clearance(setup, task.visibility, f"Task {task.id}")
         models = {spec.label: self._judge_model(spec) for spec in setup.models}
+        archive_judge_prompt(self.root, setup.prompt)  # rebuildable later (ADR-0003)
         family = any(same_family(spec, candidate.tool) for spec in setup.models)
         judged = []
         for task in tasks:
-            request = JudgeRequest(
-                prompt=setup.prompt,
-                input=f"{task.canonical_prompt}\n\n{task.input_path.read_text().strip()}",
-                criteria=task.rubric.criteria,
-                gold_answer=task.gold_answer_path.read_text(),
-                output=run.final_output(task.id),
-            )
-            judging = TaskJudging(
-                task_id=task.id,
-                judges={
-                    label: parse_reply(
-                        model.judge(request), request.criteria,
-                        f"judge model {label} on Task {task.id}",
-                    )
-                    for label, model in models.items()
-                },
-                same_family=family,
-            )
+            blind = blind_output(task.id, task, run.final_output(task.id))
+            judging = _judging(blind, setup, models, same_family=family,
+                               where=f"Task {task.id}")
             run.record_judging(judging, setup)
-            if not override_logged(self.root, run.id, setup.hash):
+            if not is_certified and not override_logged(self.root, run.id, setup.hash):
                 log_override(self.root, self.clock.today(), run.id, candidate.id, setup.hash)
             judged.append(judging)
+        self._queue_spot_checks(run)
         return tuple(judged)
+
+    def _queue_spot_checks(self, run: Run) -> None:
+        """Once every Task is judged, sample the Run's Spot-check queue (set only once)."""
+        if run.unjudged or run.judge_setup_hash is None:
+            return
+        run.queue_spot_checks(spot_check_queue(
+            run.id,
+            run.tasks,
+            self.settings.spot_check_rate,
+            covered_before=tracks_spot_checked_before(self.root, run),
+            full_checks=run.full_human_checks,
+        ))
+
+    def spot_check_item(self, run: Run, task_id: str) -> BlindOutput:
+        """What a human Spot-checking a queued Task of a judged Run sees: its input, Gold
+        Answer, final Output and the Criteria still to check; never the Judge's scores,
+        the Run or the Candidate. id is the Task id."""
+        task = run.task(task_id)
+        check_clearance(run.candidate, task)  # the Run's Clearance, before any content
+        left = run.spot_checks_left.get(task.id, ())
+        criteria = tuple(c for c in task.rubric.criteria if c.id in left)
+        return blind_output(task.id, task, run.final_output(task.id), criteria)
+
+    def record_spot_checks(
+        self, run: Run, task_id: str, scores: Mapping[str, Any]
+    ) -> tuple[SpotCheck, ...]:
+        """Record a human's 1-5 Spot-check score of each Criterion in scores for a judged
+        Task of the Run. Every score is checked before any is recorded: one refused
+        raises SpotCheckError naming it, and nothing is recorded."""
+        for criterion, score in scores.items():
+            run.check_spot_check(task_id, criterion, score)
+        return tuple(
+            run.record_spot_check(task_id, criterion, score)
+            for criterion, score in scores.items()
+        )
+
+    @property
+    def calibration_set(self) -> CalibrationSet:
+        return CalibrationSet(self.root, self.settings.private_roots)
+
+    def add_calibration_item(
+        self, run_id: str, task_id: str, *, on: datetime.date | None = None
+    ) -> CalibrationItem:
+        """Add a finished Run's final Output of a Task to the Calibration Set, Spot-checked
+        or not (stories 40, 48). A Private Task's content goes to its private root and
+        the public record keeps numbers only (ADR-0006). An unfinished Run, or an Output
+        already in the set, raises CalibrationError."""
+        run = self.resume_run(run_id)
+        return self.calibration_set.add(run, task_id, on or self.clock.today())
+
+    def calibration_items(self) -> tuple[CalibrationItem, ...]:
+        """Every Calibration Set item's numbers, oldest first."""
+        return self.calibration_set.items()
+
+    def unscored_calibration_items(self) -> tuple[BlindOutput, ...]:
+        """The items still awaiting a human score, as the human sees them: content only,
+        never the Judge's scores, the Run or the Candidate."""
+        cal = self.calibration_set
+        return tuple(cal.blind(i.id) for i in cal.items() if not i.human_scored)
+
+    def score_calibration_item(self, item_id: str, scores: Mapping[str, int]) -> CalibrationItem:
+        """Record the human's blind score, a whole number 1-5, of every Criterion of a
+        Calibration Set item; scoring it again replaces the earlier scores. Scores not
+        matching its Criteria raise CalibrationError and change nothing."""
+        return self.calibration_set.record_human_scores(item_id, scores)
+
+    def judge_calibration_set(self) -> tuple[TaskJudging, ...]:
+        """Have the Judge Setup score every Calibration Set item it has not scored yet.
+
+        The Judge sees what it sees in a Run (input, Rubric, Gold Answer, final Output),
+        never the human scores or the Candidate; TaskJudging.output_id is the item id.
+        Refusals are raised before any judge model is called: no Judge Setup or judge
+        models (JudgeUnavailable), a private item to a Judge Setup without private
+        Clearance (JudgeClearanceError). Items scored before a malformed reply stay
+        recorded, so judging again resumes.
+        """
+        setup = self._require_judge_setup()
+        cal = self.calibration_set
+        items = [i for i in cal.items() if setup.hash not in i.judge_scores]
+        for item in items:
+            check_judge_clearance(setup, item.visibility, f"calibration item {item.id}")
+        models = {spec.label: self._judge_model(spec) for spec in setup.models}
+        archive_judge_prompt(self.root, setup.prompt)
+        judged = []
+        for item in items:
+            judging = _judging(cal.blind(item.id), setup, models, same_family=False,
+                               where=f"calibration item {item.id}")
+            cal.record_judging(item.id, judging, setup)
+            judged.append(judging)
+        return tuple(judged)
+
+    def calibration_agreement(self) -> Agreement:
+        """The current Judge Setup's agreement with the human scores on the Calibration
+        Set: per Criterion and pooled, the share within 1 point and the quadratic
+        weighted kappa, against the configured thresholds."""
+        setup = self._require_judge_setup()
+        thresholds = self.settings.calibration
+        return self.calibration_set.agreement(
+            setup.hash, thresholds.within_one_point, thresholds.weighted_kappa,
+            thresholds.min_items,
+        )
+
+    @property
+    def judge_certified(self) -> bool:
+        """Whether the current Judge Setup is certified: a Certification of its hash at
+        its Clearance is in the Decision Log (ADR-0002). Editing its mode, models or
+        prompt makes a new hash, uncertified until it is calibrated and certified itself
+        (story 44), and widening its Clearance to Private Tasks drops it. False with no
+        Judge Setup."""
+        return self.judge_setup is not None and certified(self.root, self.judge_setup)
+
+    def certify_judge(self, *, on: datetime.date | None = None) -> Agreement:
+        """Certify the current Judge Setup on the Calibration Set and log it to the
+        Decision Log; returns the agreement it was certified on.
+
+        Every item must have a human score and this Judge Setup's score, there must be at
+        least calibration.min_items of them (default 12), and every Criterion must meet
+        the configured thresholds (calibration.within_one_point, weighted_kappa);
+        otherwise CertificationFailed names each shortfall and nothing is logged. The
+        Certification records the Judge Setup's Clearance (ADR-0002). Certifying a
+        certified Judge Setup logs nothing new.
+        """
+        setup = self._require_judge_setup()
+        agreement = self.calibration_agreement()
+        if not agreement.meets_thresholds:
+            raise CertificationFailed(
+                f"Judge Setup {setup.hash} is not certified: " + "; ".join(agreement.shortfalls)
+            )
+        if not self.judge_certified:
+            item_ids = tuple(i.id for i in self.calibration_set.items())
+            archive_judge_prompt(self.root, setup.prompt)
+            log_certification(self.root, on or self.clock.today(), setup, agreement, item_ids,
+                              archive_rubric(self.root, self.rubric))
+        return agreement
+
+    def _require_judge_setup(self) -> JudgeSetup:
+        if self.judge_setup is None:
+            raise JudgeUnavailable(f"no Judge Setup: {JUDGE_FILE} is missing")
+        return self.judge_setup
 
     def _judge_model(self, spec: JudgeModelSpec) -> JudgeModel:
         if self.judges is None:
@@ -713,6 +893,123 @@ class Workspace:
             self.task_context, run_id, {c.id: c for c in self.candidates}, self.tasks
         )
 
+    def update_settings(self, **changes: Any) -> Settings:
+        """Change settings and write config/settings.yaml back (ADR-0001).
+
+        changes are among tracks, weights, regression_margin, retest_margin,
+        spot_check_rate, calibration and normalization; a mapping merges into the
+        current one by key, so weights={"quality": 40, "edit_distance": 30} changes two
+        weights. The result is validated as on load: an invalid change, weights not
+        summing to 100 included, raises ConfigError naming the field and writes nothing.
+        Private roots are machine-specific (config/local.yaml) and not edited here.
+
+        Removing (or renaming) a Track that a Task, or a Task version a Run used, still
+        declares raises ConfigEditRefused naming them, since that Run could no longer
+        load.
+        """
+        self.settings = edit_settings(self.root, changes, self._tracks_in_use())
+        return self.settings
+
+    def set_price(
+        self, model: str, *, input_per_mtok: float, output_per_mtok: float
+    ) -> PriceTable:
+        """Add or change a model's token prices (USD per million tokens) in
+        config/prices.yaml. The model is the exact string a Candidate uses. An invalid
+        price raises ConfigError naming the field and writes nothing."""
+        self.prices = set_price(self.root, model, input_per_mtok, output_per_mtok)
+        return self.prices
+
+    def remove_price(self, model: str) -> PriceTable:
+        """Remove a model from the price table; ConfigError if it has no price. A Run's
+        recorded costs are kept: cost is computed when a Task is sent."""
+        self.prices = remove_price(self.root, model)
+        return self.prices
+
+    def update_judge_setup(
+        self,
+        *,
+        mode: str | None = None,
+        models: Iterable[Mapping[str, Any]] | None = None,
+        clearance: str | None = None,
+        prompt_file: str | None = None,
+        prompt: str | None = None,
+    ) -> JudgeSetup:
+        """Change the Judge Setup in config/judge.yaml, creating it if absent.
+
+        mode is single or panel; models each {provider, model} with optional family and
+        env_var, replacing the current list; clearance public_only or
+        public_and_private; prompt_file the judge prompt's path relative to the
+        Workspace root; prompt the new text of the prompt file. Validated as on load:
+        an invalid change raises ConfigError naming the field and writes nothing.
+
+        Changing the mode, the models or the prompt text makes a new Judge Setup with a
+        new hash, which has no Certification (ADR-0003); clearance and env_var are not
+        part of the hash, but widening clearance to public_and_private drops the
+        Certification (ADR-0002). Runs keep the hash of the Judge Setup that judged them.
+        """
+        given = {"mode": mode, "clearance": clearance, "prompt": prompt_file,
+                 "models": None if models is None else plain_list(models)}
+        changes = {k: v for k, v in given.items() if v is not None}
+        self.judge_setup = edit_judge_setup(self.root, changes, prompt)
+        return self.judge_setup
+
+    def update_rubric(self, criteria: list[Mapping[str, Any]]) -> Rubric:
+        """Replace the shared Rubric's Criteria, each {id, name, description}, in order:
+        adding, editing or removing a shared Criterion (story 63).
+
+        Validated as on load (ConfigError naming the field), and every Task must still
+        load with it: a change that would leave a Task invalid, such as a shared Criterion
+        a Task already defines, raises ConfigEditRefused naming the Tasks. Either way
+        nothing is written. The Rubric being replaced is archived by hash first, so a Run
+        keeps scoring on the Rubric it started with (ADR-0003).
+        """
+        rubric = parse_rubric_edit(criteria)
+        ctx = TaskContext(self.root, self.settings.private_roots, rubric, self.settings.tracks)
+        try:
+            load_tasks(ctx)
+        except ConfigError as exc:
+            raise ConfigEditRefused(
+                RUBRIC_FILE, "criteria", f"would leave a Task invalid: {exc}"
+            ) from None
+        archive_rubric(self.root, self.rubric)
+        write_rubric(self.root, rubric)
+        self.rubric = rubric
+        self._reload_tasks()
+        return rubric
+
+    def run_rubric(self, run: Run) -> Rubric | None:
+        """The shared Rubric the Run was started on, rebuilt from the archive
+        (ADR-0003); None for a Run started before Runs recorded it."""
+        return None if run.rubric_hash is None else self.archived_rubric(run.rubric_hash)
+
+    def run_judge_prompt(self, run: Run) -> str | None:
+        """The judge prompt that scored the Run, rebuilt from the archive (ADR-0003);
+        None until it is judged."""
+        digest = run.judge_prompt_hash
+        return None if digest is None else self.archived_judge_prompt(digest)
+
+    def archived_rubric(self, digest: str) -> Rubric | None:
+        """A shared Rubric by its hash, as a Run or a Certification records it."""
+        return archived_rubric(self.root, digest)
+
+    def archived_judge_prompt(self, digest: str) -> str | None:
+        """A judge prompt's text by its hash, as a Run or a Certification records it."""
+        return archived_judge_prompt(self.root, digest)
+
+    def _tracks_in_use(self) -> dict[str, list[str]]:
+        """Each Track a loaded Task or a Run's Task version declares -> what declares it."""
+        used: dict[str, list[str]] = {}
+        for task in self.tasks:
+            used.setdefault(task.track, []).append(f"Task {task.id}")
+        for task_id, version in sorted(task_versions_used(self.root)):
+            task = find_by_id(self.tasks, task_id)
+            if task is None or task.version == version:
+                continue
+            old = load_version(self.task_context, task, version)
+            if old is not None:
+                used.setdefault(old.track, []).append(f"Task {task_id} version {version}")
+        return used
+
     def score(self, results: Iterable[TaskResult]) -> RunScore:
         """Score a Run's per-Task result records with this Workspace's weights and bands."""
         return score_run(self.settings, results)
@@ -720,7 +1017,10 @@ class Workspace:
     def compare(self, challenger_run_id: str, baseline_run_id: str) -> Comparison:
         """Compare a challenger Run with a Baseline Run and reach a Verdict.
 
-        Spot-checks recorded on either Run (Run.record_spot_check) are weighed too.
+        Spot-checks recorded on either Run (Run.record_spot_check) are weighed too, and
+        a Run with queued Spot-checks left (Run.spot_checks_left) is refused
+        (SpotChecksUnfinished). A Run scored from results files (human Criterion scores,
+        never judged) has no queue and needs none.
         The Baseline must hold a passing Gate: its latest review applies (GateNotPassed).
         """
         baseline = self.baseline
@@ -756,6 +1056,43 @@ class Workspace:
         """Append a Verdict to the Decision Log; returns the new entry's file."""
         return log_verdict(self.root, verdict, on or self.clock.today(), judge_setup_hash)
 
+    def log_comparison(
+        self,
+        comparison: Comparison,
+        *,
+        on: datetime.date | None = None,
+        judge_setup_hash: str | None = None,
+    ) -> Path:
+        """Append a Comparison's Verdict to the Decision Log with the scorecard it was
+        reached on (story 59), so the entry can be shown as logged; judge_setup_hash
+        defaults to the Judge Setup that scored both Runs."""
+        return log_verdict(
+            self.root, comparison.verdict, on or self.clock.today(),
+            judge_setup_hash or comparison.judge_setup_hash, comparison.scorecard,
+        )
+
     def decision_log(self) -> tuple[dict[str, Any], ...]:
         """Every Decision Log entry, oldest first, as written to decisions/."""
         return read_log(self.root)
+
+
+def _judging(
+    blind: BlindOutput,
+    setup: JudgeSetup,
+    models: Mapping[str, JudgeModel],
+    *,
+    same_family: bool,
+    where: str,
+) -> TaskJudging:
+    """Every judge model's parsed reply to the Judge Setup's request for the Output;
+    where names it in a malformed reply's error."""
+    request = JudgeRequest.for_output(setup.prompt, blind)
+    return TaskJudging(
+        output_id=blind.id,
+        judges={
+            label: parse_reply(model.judge(request), request.criteria,
+                               f"judge model {label} on {where}")
+            for label, model in models.items()
+        },
+        same_family=same_family,
+    )

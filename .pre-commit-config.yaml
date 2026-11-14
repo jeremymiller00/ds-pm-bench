@@ -10,3 +10,13 @@ repos:
     hooks:
       - id: ruff
         args: [--fix]
+  # Warn (never block) when a Public Task looks like it holds internal identifiers:
+  # email addresses, or config/local.yaml's public_denylist patterns (story 69).
+  - repo: local
+    hooks:
+      - id: check-public-tasks
+        name: Public Tasks hold no internal identifiers
+        entry: uv run --quiet python scripts/check_public_tasks.py
+        language: system
+        files: ^(tasks|examples)/[^/]+/(versions/\d+/)?(input\.[^/]+|gold\.md)$
+        verbose: true
