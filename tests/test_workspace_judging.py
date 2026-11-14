@@ -430,3 +430,37 @@ def test_an_invalid_judge_setup_names_the_file_and_field(ws_dir: Path, change, f
         Workspace.open(ws_dir)
 
     assert (raised.value.file, raised.value.field) == ("config/judge.yaml", field)
+
+
+def judged_comparison(ws_dir: Path, *, rejudge_challenger_with: str | None = None):
+    data = candidate(tool="other", version="1", adapter="manual_assisted", env_vars=[])
+    data["gate"]["clearance"] = "public_only"
+    write_candidate(ws_dir, "other@1", data)
+    ws = Workspace.open(ws_dir, judges=FakeJudges())
+    baseline = recorded_run(ws)
+    ws.judge_run(baseline, allow_uncertified=True)
+    if rejudge_challenger_with is not None:
+        (ws_dir / "config" / "judge" / "prompt.md").write_text(rejudge_challenger_with)
+        ws = Workspace.open(ws_dir, judges=FakeJudges())
+    challenger = ws.start_run("other@1", on=DAY)
+    challenger.record_output("T1.1", raw="draft", final=OUTPUT, active_seconds=60,
+                             latency_seconds=5, cost_usd=None)
+    ws.judge_run(challenger, allow_uncertified=True)
+    return ws, ws.compare(challenger.id, baseline.id)
+
+
+def test_judge_scores_feed_the_comparison_which_carries_the_judge_setup_hash(ws_dir: Path):
+    ws, comparison = judged_comparison(ws_dir)
+
+    assert comparison.challenger_score.dimensions["quality"] == 4
+    assert comparison.judge_setup_hash == ws.judge_setup.hash
+    assert not any("Judge Setup" in w for w in comparison.verdict.warnings)
+    path = ws.log_verdict(comparison.verdict, judge_setup_hash=comparison.judge_setup_hash)
+    assert yaml.safe_load(path.read_text())["judge_setup_hash"] == ws.judge_setup.hash
+
+
+def test_runs_judged_by_different_judge_setups_warn_and_carry_no_single_hash(ws_dir: Path):
+    _, comparison = judged_comparison(ws_dir, rejudge_challenger_with="Score strictly.")
+
+    assert comparison.judge_setup_hash is None
+    assert any("different Judge Setups" in w for w in comparison.verdict.warnings)
