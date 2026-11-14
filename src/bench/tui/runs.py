@@ -229,18 +229,25 @@ class RunsPane(Vertical):
         run = self.run
         if run is None or event.option.id is None:
             return
+        manual = run.candidate.manual_assisted
+        begin = self.workspace.begin_manual_task if manual else self.workspace.begin_edit_pass
         try:
-            attempt = self.workspace.begin_manual_task(run, event.option.id)
+            attempt = begin(run, event.option.id)
         except RUN_ERRORS as exc:
             self._status(str(exc))
             return
 
         def saved(record: OutputRecord | None) -> None:
             self._show_progress()
-            if record is None:
+            if record is not None:
+                self._status(output_summary(record))
+            elif manual:
                 self._status(f"{attempt.task_id} abandoned; nothing recorded.")
             else:
-                self._status(output_summary(record))
+                self._status(
+                    f"{attempt.task_id} edit abandoned; nothing recorded, the raw Output "
+                    "kept for another edit pass."
+                )
 
         self.app.push_screen(ManualTaskScreen(attempt), saved)
 
@@ -249,7 +256,8 @@ class RunsPane(Vertical):
 
 
 class ManualTaskScreen(Screen[OutputRecord | None]):
-    """One Task worked by hand: copy the prompt, paste the raw Output, edit, save.
+    """One Task's Attempt: copy the prompt, paste the raw Output, edit, save. An
+    automated Task's edit pass opens with the raw Output already in, ready to edit.
 
     Dismisses with the saved OutputRecord, or None when abandoned.
     """
@@ -275,18 +283,27 @@ class ManualTaskScreen(Screen[OutputRecord | None]):
 
     def compose(self) -> ComposeResult:
         with VerticalScroll():
+            raw = self.attempt.raw
             yield Static(f"Task {self.attempt.task_id}", markup=False)
             yield Static("", id="task-timer", markup=False)
-            yield Static(PASTE_HELP, id="task-help", markup=False)
+            yield Static(PASTE_HELP if raw is None else EDIT_HELP, id="task-help",
+                         markup=False)
             yield Label("Canonical Prompt and input")
             yield TextArea(self.attempt.prompt, id="task-prompt", read_only=True)
-            yield Label("Raw Output (paste it here, then ctrl+s)")
-            yield TextArea("", id="task-raw")
+            if raw is None:
+                yield Label("Raw Output (paste it here, then ctrl+s)")
+                yield TextArea("", id="task-raw")
+            else:
+                yield Label("Raw Output (as the Candidate returned it)")
+                yield TextArea(raw, id="task-raw", read_only=True)
+                yield Label(FINAL_LABEL)
+                yield TextArea(self.attempt.draft or "", id="task-draft")
             yield Static("", id="task-error", markup=False)
         yield Footer()
 
     def on_mount(self) -> None:
-        self.query_one("#task-raw", TextArea).focus()
+        editing = "#task-raw" if self.attempt.raw is None else "#task-draft"
+        self.query_one(editing, TextArea).focus()
         self.refresh_timer()
         self.set_interval(1, self.refresh_timer)
 
@@ -324,7 +341,7 @@ class ManualTaskScreen(Screen[OutputRecord | None]):
         raw.read_only = True
         draft = TextArea(self.attempt.draft or "", id="task-draft")
         scroll = self.query_one(VerticalScroll)
-        scroll.mount(Label("Final (edit here, then ctrl+s to save)"), before="#task-error")
+        scroll.mount(Label(FINAL_LABEL), before="#task-error")
         scroll.mount(draft, before="#task-error")
         self.query_one("#task-help", Static).update(EDIT_HELP)
         draft.focus()
@@ -371,6 +388,7 @@ class ManualTaskScreen(Screen[OutputRecord | None]):
         self.query_one("#task-error", Static).update(message)
 
 
+FINAL_LABEL = "Final (edit here, then ctrl+s to save)"
 EDITOR_NOTE = (
     "e opens the draft in $EDITOR; the app suspends and all the time it is open counts "
     "as active time."
