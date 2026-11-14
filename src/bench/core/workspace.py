@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from bench.core.adapters import Clock, Editor, ExternalEditor, SystemClock
+from bench.core.attempts import Attempt
 from bench.core.candidates import (
     CANDIDATES_FOLDER,
     Candidate,
@@ -32,6 +33,7 @@ from bench.core.errors import (
 from bench.core.fields import FieldReader
 from bench.core.kinds import Clearance, Suite
 from bench.core.lookup import find_by_id
+from bench.core.manual_time import ManualTimeStopwatch
 from bench.core.prices import PriceTable, load_prices
 from bench.core.results import TaskResult
 from bench.core.rubric import Rubric, load_rubric
@@ -48,7 +50,6 @@ from bench.core.runs import (
     tasks_in,
 )
 from bench.core.scoring import RunScore, score_run
-from bench.core.sessions import ManualSession, ManualTimeStopwatch
 from bench.core.settings import SETTINGS_FILE, Settings, load_settings
 from bench.core.tasks import (
     CriterionSpec,
@@ -378,9 +379,10 @@ class Workspace:
         """Change a Candidate's adapter, settings, env_vars or cost_per_task_usd.
 
         A Candidate a Run has used is frozen (ADR-0003), so the change is written as
-        its next revision, <tool>@<version>~<n>, which keeps the Gate and takes the
-        Baseline mark if the old one held it; the used file stays as it was. Otherwise
-        the change is made in place. A superseded revision, or a field naming a
+        the next Candidate in its Lineage, <tool>@<version>~<n>, which keeps the Gate
+        and takes the Baseline mark if the old one held it; the used file stays as it
+        was. Otherwise
+        the change is made in place. A superseded Candidate, or a field naming a
         different Candidate (tool, version) or set elsewhere (baseline, gate), raises
         CandidateAuthoringError; invalid values raise ConfigError. Nothing is written.
         """
@@ -396,7 +398,7 @@ class Workspace:
 
     @property
     def current_candidates(self) -> tuple[Candidate, ...]:
-        """The latest revision of each Candidate, leaving out superseded ones."""
+        """The latest Candidate in each Lineage, leaving out superseded ones."""
         return tuple(c for c in self.candidates if self._superseding(c) is None)
 
     def _superseding(self, candidate: Candidate) -> Candidate | None:
@@ -418,14 +420,15 @@ class Workspace:
         return candidate
 
     def _change(self, candidate: Candidate, changes: dict[str, Any]) -> Candidate:
-        """Write the change in place, or as the next revision if a Run used it."""
+        """Write the change in place, or as the next Candidate in its Lineage if a Run
+        used it."""
         if candidate.id not in candidate_ids_used(self.root):
             changed = self._write(candidate, **changes)
         else:
-            revision_id = f"{candidate.lineage}~{candidate.lineage_position + 1}"
+            next_id = f"{candidate.lineage}~{candidate.lineage_position + 1}"
             data = candidate_data(candidate)
             data.update(changes)
-            changed = write_candidate(self.root, revision_id, data)
+            changed = write_candidate(self.root, next_id, data)
             if changed.baseline:
                 self._unmark_baselines_except(changed.id)
         self._reload_candidates()
@@ -473,8 +476,8 @@ class Workspace:
         check_clearance(candidate, task)
         return run.task_input(task_id)
 
-    def begin_manual_task(self, run: Run, task_id: str) -> ManualSession:
-        """Begin working a Task of the Run by hand: returns the session showing its
+    def begin_manual_task(self, run: Run, task_id: str) -> Attempt:
+        """Begin working a Task of the Run by hand: returns the Attempt showing its
         Canonical Prompt and input, with the clock started.
 
         Clearance is checked before any content is read (ClearanceError). A Task whose
@@ -483,7 +486,7 @@ class Workspace:
         prompt = self.task_input(run, task_id)
         if task_id not in run.pending:
             raise ValueError(f"Run {run.id}: Task {task_id}'s Output is already recorded")
-        return ManualSession(run, task_id, prompt, self.clock, self.editor)
+        return Attempt(run, task_id, prompt, self.clock, self.editor)
 
     def run_ids(self) -> tuple[str, ...]:
         """The id of every Run under runs/, newest first, for choosing one to resume."""

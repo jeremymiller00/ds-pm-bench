@@ -15,8 +15,8 @@ from bench import Workspace
 from bench.tui.app import BenchApp
 from bench.tui.runs import ManualTaskScreen, ManualTimeScreen
 from test_tui import configure_private_root, write_task
+from test_workspace_attempts import FakeClock, FakeEditor
 from test_workspace_candidates import candidate, write_candidate
-from test_workspace_manual_session import FakeClock, FakeEditor
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 CANDIDATE = "chatbot@web-1"
@@ -124,13 +124,13 @@ async def test_pause_is_refused_before_the_raw_output_then_stops_the_timer(
         await start_run(app, pilot)
         screen = await open_task(app, pilot)
         await pilot.press("escape", "p")
-        assert not screen.session.paused
+        assert not screen.attempt.paused
         assert "submit the raw Output before you pause" in text(app, "#task-error")
 
         clock.advance(30)
         await paste_raw(app, pilot, "Raw draft.")
         await pilot.press("escape", "p")
-        assert screen.session.paused
+        assert screen.attempt.paused
         assert screen.query_one("#task-draft", TextArea).read_only
         assert "paused" in text(app, "#task-timer")
 
@@ -138,7 +138,7 @@ async def test_pause_is_refused_before_the_raw_output_then_stops_the_timer(
         await pilot.press("e")
         assert "resume the paused timer before editing" in text(app, "#task-error")
         await pilot.press("p")
-        assert not screen.session.paused
+        assert not screen.attempt.paused
         assert not screen.query_one("#task-draft", TextArea).read_only
 
         clock.advance(45)

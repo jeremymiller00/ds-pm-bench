@@ -1,6 +1,6 @@
 """The Runs tab: start or resume a Run, then work its Tasks by hand.
 
-Everything goes through the Workspace and its ManualSession; this module only shows
+Everything goes through the Workspace and its Attempt; this module only shows
 what they report and passes on what the person types.
 """
 
@@ -16,6 +16,7 @@ from textual.screen import ModalScreen, Screen
 from textual.widgets import Button, Footer, Label, OptionList, Select, Static, TextArea
 from textual.widgets.option_list import Option
 
+from bench.core.attempts import Attempt
 from bench.core.errors import (
     ClearanceError,
     ConfigError,
@@ -26,8 +27,8 @@ from bench.core.errors import (
     UnknownRunError,
 )
 from bench.core.kinds import Clearance, Suite
+from bench.core.manual_time import ManualTimeStopwatch
 from bench.core.runs import OutputRecord, Run
-from bench.core.sessions import ManualSession, ManualTimeStopwatch
 from bench.core.tasks import Task
 from bench.core.workspace import Workspace
 
@@ -173,7 +174,7 @@ class RunsPane(Vertical):
         if run is None or event.option.id is None:
             return
         try:
-            session = self.workspace.begin_manual_task(run, event.option.id)
+            attempt = self.workspace.begin_manual_task(run, event.option.id)
         except RUN_ERRORS as exc:
             self._status(str(exc))
             return
@@ -181,11 +182,11 @@ class RunsPane(Vertical):
         def saved(record: OutputRecord | None) -> None:
             self._show_progress()
             if record is None:
-                self._status(f"{session.task_id} abandoned; nothing recorded.")
+                self._status(f"{attempt.task_id} abandoned; nothing recorded.")
             else:
                 self._status(output_summary(record))
 
-        self.app.push_screen(ManualTaskScreen(session), saved)
+        self.app.push_screen(ManualTaskScreen(attempt), saved)
 
     def _status(self, message: str) -> None:
         self.query_one("#run-status", Static).update(message)
@@ -212,17 +213,17 @@ class ManualTaskScreen(Screen[OutputRecord | None]):
         Binding("a", "abandon", "Abandon"),
     ]
 
-    def __init__(self, session: ManualSession) -> None:
+    def __init__(self, attempt: Attempt) -> None:
         super().__init__()
-        self.session = session
+        self.attempt = attempt
 
     def compose(self) -> ComposeResult:
         with VerticalScroll():
-            yield Static(f"Task {self.session.task_id}", markup=False)
+            yield Static(f"Task {self.attempt.task_id}", markup=False)
             yield Static("", id="task-timer", markup=False)
             yield Static(PASTE_HELP, id="task-help", markup=False)
             yield Label("Canonical Prompt and input")
-            yield TextArea(self.session.prompt, id="task-prompt", read_only=True)
+            yield TextArea(self.attempt.prompt, id="task-prompt", read_only=True)
             yield Label("Raw Output (paste it here, then ctrl+s)")
             yield TextArea("", id="task-raw")
             yield Static("", id="task-error", markup=False)
@@ -234,8 +235,8 @@ class ManualTaskScreen(Screen[OutputRecord | None]):
         self.set_interval(1, self.refresh_timer)
 
     def refresh_timer(self) -> None:
-        """Show the session's running timer; called each second and after every action."""
-        s = self.session
+        """Show the Attempt's running timer; called each second and after every action."""
+        s = self.attempt
         state = "paused" if s.paused else "running"
         latency = "" if s.latency_seconds is None else (
             f"  latency {clock_time(s.latency_seconds)}"
@@ -248,11 +249,11 @@ class ManualTaskScreen(Screen[OutputRecord | None]):
         self.set_focus(None)
 
     def action_copy_prompt(self) -> None:
-        self.app.copy_to_clipboard(self.session.prompt)
+        self.app.copy_to_clipboard(self.attempt.prompt)
         self._error("Prompt and input copied to the clipboard.")
 
     def action_save(self) -> None:
-        if self.session.raw is None:
+        if self.attempt.raw is None:
             self._submit_raw()
         else:
             self._finish()
@@ -260,12 +261,12 @@ class ManualTaskScreen(Screen[OutputRecord | None]):
     def _submit_raw(self) -> None:
         raw = self.query_one("#task-raw", TextArea)
         try:
-            self.session.submit_raw(raw.text)
+            self.attempt.submit_raw(raw.text)
         except ValueError as exc:
             self._error(str(exc))
             return
         raw.read_only = True
-        draft = TextArea(self.session.draft or "", id="task-draft")
+        draft = TextArea(self.attempt.draft or "", id="task-draft")
         scroll = self.query_one(VerticalScroll)
         scroll.mount(Label("Final (edit here, then ctrl+s to save)"), before="#task-error")
         scroll.mount(draft, before="#task-error")
@@ -277,14 +278,14 @@ class ManualTaskScreen(Screen[OutputRecord | None]):
     def _finish(self) -> None:
         final = self.query_one("#task-draft", TextArea).text
         try:
-            record = self.session.finish(final)
+            record = self.attempt.finish(final)
         except ValueError as exc:
             self._error(str(exc))
             return
         self.dismiss(record)
 
     def action_pause_resume(self) -> None:
-        s = self.session
+        s = self.attempt
         try:
             s.resume() if s.paused else s.pause()
         except ValueError as exc:
@@ -296,9 +297,9 @@ class ManualTaskScreen(Screen[OutputRecord | None]):
 
     def action_external_editor(self) -> None:
         try:
-            self.session.check_editable()  # refuse before giving up the terminal
+            self.attempt.check_editable()  # refuse before giving up the terminal
             with self.app.suspend():
-                draft = self.session.edit_externally()
+                draft = self.attempt.edit_externally()
         except (ValueError, SuspendNotSupported, subprocess.CalledProcessError) as exc:
             self._error(str(exc))
             return
@@ -307,7 +308,7 @@ class ManualTaskScreen(Screen[OutputRecord | None]):
         self.refresh_timer()
 
     def action_abandon(self) -> None:
-        self.session.abandon()
+        self.attempt.abandon()
         self.dismiss(None)
 
     def _error(self, message: str) -> None:

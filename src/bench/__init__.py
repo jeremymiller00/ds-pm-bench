@@ -1,6 +1,7 @@
 """DS PM Benchmark core library."""
 
 from bench.core.adapters import Clock, Editor, ExternalEditor, SystemClock
+from bench.core.attempts import Attempt
 from bench.core.errors import (
     CandidateAuthoringError,
     ClearanceError,
@@ -20,7 +21,6 @@ from bench.core.errors import (
 )
 from bench.core.results import TaskResult
 from bench.core.scoring import RunScore, TaskScore
-from bench.core.sessions import ManualSession
 from bench.core.verdicts import Comparison, Verdict
 from bench.core.workspace import Workspace
 
@@ -33,7 +33,7 @@ __all__ = [
     "Editor",
     "ExternalEditor",
     "GateNotPassed",
-    "ManualSession",
+    "Attempt",
     "RunExists",
     "RunIncomplete",
     "RunMismatch",

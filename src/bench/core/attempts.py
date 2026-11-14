@@ -1,4 +1,5 @@
-"""A manual-assisted session: one person working one Task of a Run by hand.
+"""An Attempt: one manual-assisted pass at a Task within a Run, from showing the
+Canonical Prompt to saving the final.
 
 begin (Workspace.begin_manual_task; Clearance is checked first and the clock starts)
 -> submit_raw (latency = start to paste) -> edit, in the TUI's built-in editor with
@@ -10,14 +11,11 @@ Abandoning records nothing, so the Task can be begun again until it is finished.
 
 from __future__ import annotations
 
-from collections.abc import Callable
-
 from bench.core.adapters import Clock, Editor
 from bench.core.runs import OutputRecord, Run
-from bench.core.tasks import Task
 
 
-class ManualSession:
+class Attempt:
     def __init__(
         self, run: Run, task_id: str, prompt: str, clock: Clock, editor: Editor
     ) -> None:
@@ -83,7 +81,7 @@ class ManualSession:
     def finish(self, final: str | None = None) -> OutputRecord:
         """Save raw and final (the draft when final is omitted) with timings and cost.
 
-        A pause still open at save time does not count as active time. The session is
+        A pause still open at save time does not count as active time. The Attempt is
         then over.
         """
         raw = self._need_raw("finish")
@@ -99,40 +97,16 @@ class ManualSession:
         return record
 
     def abandon(self) -> None:
-        """Drop the session, recording nothing; the Task can be begun again."""
+        """Abandon the Attempt, recording nothing; the Task can be begun again."""
         self._check_open()
         self._over = "abandoned"
 
     def _check_open(self) -> None:
         if self._over is not None:
-            raise ValueError(f"Task {self.task_id}: this session is {self._over}")
+            raise ValueError(f"Task {self.task_id}: this Attempt is {self._over}")
 
     def _need_raw(self, action: str) -> str:
         self._check_open()
         if self.raw is None:
             raise ValueError(f"Task {self.task_id}: submit the raw Output before you {action}")
         return self.raw
-
-
-class ManualTimeStopwatch:
-    """Times a person doing a Task by hand, to record its Manual Time.
-
-    Started on creation (Workspace.begin_manual_time); finish records the elapsed
-    minutes, to a tenth, through record and returns what it returns.
-    """
-
-    def __init__(
-        self, task_id: str, clock: Clock, record: Callable[[str, float], Task]
-    ) -> None:
-        self.task_id = task_id
-        self._clock = clock
-        self._record = record
-        self._started = clock.now()
-
-    @property
-    def elapsed_seconds(self) -> float:
-        return self._clock.now() - self._started
-
-    def finish(self) -> Task:
-        return self._record(self.task_id, round(self.elapsed_seconds / 60, 1))
-

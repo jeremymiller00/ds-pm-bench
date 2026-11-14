@@ -77,10 +77,13 @@ refused unless you pass `--suite public_only`. Tasks still holding a placeholder
 listed under `excluded` in the Run's `run.yaml`.
 
 A Run resumes only while its Candidate (tool, version, adapter, settings, flat
-per-Task cost) is unchanged (ADR 0003). Changing a Candidate a Run used, or
-recording its Gate again, writes the next revision `candidates/<tool>@<version>~<n>.yaml`
-and leaves the used file as it was; the new revision takes the Baseline mark if the
-old one held it. A failed Gate appends a reject Verdict to `decisions/`. A
+per-Task cost) is unchanged (ADR 0003). Changing a Candidate a Run used adds the
+next Candidate to its Lineage, `candidates/<tool>@<version>~<n>.yaml`, and leaves the
+used file as it was; the new Candidate takes the Baseline mark if the old one held it.
+The Gate is a review record, not part of the Candidate: recording it again appends a
+dated review in place, and the latest review applies at once, even to a Run in
+progress (a failed or narrowed Gate stops it). A review that moves the Gate to failed
+appends a reject Verdict to `decisions/`; the Baseline must hold a passing Gate. A
 manual-assisted Candidate may set `cost_per_task_usd`, recorded as each Task's cost;
 without it cost is null. Editing a Task a Run used makes a new version and first
 copies the used one into the Task's `versions/<n>/` folder (in the private root for

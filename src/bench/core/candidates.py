@@ -1,8 +1,9 @@
 """Candidates: candidates/<tool>@<version>.yaml, each with its Gate record (ADR-0003, ADR-0005).
 
-A Candidate is frozen once a Run uses it; any change is a new file, the next revision
-<tool>@<version>~<n>, and the used file stays as it was so its Runs still load. The
-Baseline mark is a designation, not part of the Candidate, so it moves in place.
+A Candidate is frozen once a Run uses it; any change is a new file, the next Candidate
+in its Lineage, <tool>@<version>~<n>, and the used file stays as it was so its Runs
+still load. The Baseline mark and the Gate are not part of the Candidate, so they
+change in place: the Gate is a dated, append-only list of reviews (ADR-0003).
 Config holds environment variable names only, never secret values.
 """
 
@@ -47,8 +48,8 @@ GATE_FIELDS = (
     "clearance",
 )
 
-# A revision after the first: <tool>@<version>~<n>, n >= 2.
-_REVISION = re.compile(r"^(?P<lineage>.+)~(?P<n>[2-9]|[1-9][0-9]+)$")
+# A Candidate after the first in its Lineage: <tool>@<version>~<n>, n >= 2.
+_LINEAGE_SUFFIX = re.compile(r"^(?P<lineage>.+)~(?P<n>[2-9]|[1-9][0-9]+)$")
 _ID_UNSAFE = re.compile(r"[^a-z0-9._-]+")
 _ENV_VAR = re.compile(r"^[A-Z][A-Z0-9_]*$")
 # Settings keys that would hold a secret value; these belong in env_vars instead.
@@ -89,14 +90,14 @@ class Candidate:
 
     @property
     def lineage(self) -> str:
-        """The id without its revision suffix: what every revision of it shares."""
-        m = _REVISION.match(self.id)
+        """The Lineage: the id of its first Candidate, shared by every Candidate in it."""
+        m = _LINEAGE_SUFFIX.match(self.id)
         return m.group("lineage") if m else self.id
 
     @property
     def lineage_position(self) -> int:
-        """1 for <tool>@<version>; n for <tool>@<version>~<n>."""
-        m = _REVISION.match(self.id)
+        """Its position in the Lineage: 1 for <tool>@<version>; n for <tool>@<version>~<n>."""
+        m = _LINEAGE_SUFFIX.match(self.id)
         return int(m.group("n")) if m else 1
 
     @property
