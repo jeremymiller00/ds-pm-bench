@@ -11,8 +11,17 @@ Abandoning records nothing, so the Task can be begun again until it is finished.
 
 from __future__ import annotations
 
+from enum import StrEnum
+
 from bench.core.adapters import Clock, Editor
+from bench.core.errors import AttemptError
 from bench.core.runs import OutputRecord, Run
+
+
+class AttemptState(StrEnum):
+    OPEN = "open"
+    FINISHED = "finished"
+    ABANDONED = "abandoned"
 
 
 class Attempt:
@@ -27,7 +36,7 @@ class Attempt:
         self._started = clock.now()
         self._paused_seconds = 0.0
         self._paused_at: float | None = None
-        self._over: str | None = None  # "finished" or "abandoned"
+        self.state = AttemptState.OPEN
         self.raw: str | None = None
         self.latency_seconds: float | None = None
         self.draft: str | None = None  # the latest edit; the raw Output until edited
@@ -46,7 +55,7 @@ class Attempt:
         """The Candidate's raw Output, pasted back; stops the latency clock."""
         self._check_open()
         if self.raw is not None:
-            raise ValueError(f"Task {self.task_id}: the raw Output is already submitted")
+            raise AttemptError(f"Task {self.task_id}: the raw Output is already submitted")
         self.latency_seconds = self._clock.now() - self._started
         self.raw = self.draft = raw
 
@@ -54,13 +63,13 @@ class Attempt:
         """Pause the edit timer, such as for an interruption."""
         self._need_raw("pause")
         if self.paused:
-            raise ValueError(f"Task {self.task_id}: the edit timer is already paused")
+            raise AttemptError(f"Task {self.task_id}: the edit timer is already paused")
         self._paused_at = self._clock.now()
 
     def resume(self) -> None:
         self._check_open()
         if self._paused_at is None:
-            raise ValueError(f"Task {self.task_id}: the edit timer is not paused")
+            raise AttemptError(f"Task {self.task_id}: the edit timer is not paused")
         self._paused_seconds += self._clock.now() - self._paused_at
         self._paused_at = None
 
@@ -72,11 +81,11 @@ class Attempt:
         return self.draft
 
     def check_editable(self) -> None:
-        """Raise ValueError if the draft cannot be opened in $EDITOR now: before the raw
+        """Raise AttemptError if the draft cannot be opened in $EDITOR now: before the raw
         Output is submitted, or while paused. Lets a TUI refuse before suspending."""
         self._need_raw("edit")
         if self.paused:
-            raise ValueError(f"Task {self.task_id}: resume the paused timer before editing")
+            raise AttemptError(f"Task {self.task_id}: resume the paused timer before editing")
 
     def finish(self, final: str | None = None) -> OutputRecord:
         """Save raw and final (the draft when final is omitted) with timings and cost.
@@ -85,6 +94,8 @@ class Attempt:
         then over.
         """
         raw = self._need_raw("finish")
+        if self.task_id not in self.run.pending:
+            raise AttemptError(f"Task {self.task_id}: its Output is already recorded")
         record = self.run.record_output(
             self.task_id,
             raw=raw,
@@ -93,20 +104,20 @@ class Attempt:
             latency_seconds=self.latency_seconds,
             cost_usd=self.run.candidate.task_cost_usd,
         )
-        self._over = "finished"
+        self.state = AttemptState.FINISHED
         return record
 
     def abandon(self) -> None:
         """Abandon the Attempt, recording nothing; the Task can be begun again."""
         self._check_open()
-        self._over = "abandoned"
+        self.state = AttemptState.ABANDONED
 
     def _check_open(self) -> None:
-        if self._over is not None:
-            raise ValueError(f"Task {self.task_id}: this Attempt is {self._over}")
+        if self.state != AttemptState.OPEN:
+            raise AttemptError(f"Task {self.task_id}: this Attempt is {self.state}")
 
     def _need_raw(self, action: str) -> str:
         self._check_open()
         if self.raw is None:
-            raise ValueError(f"Task {self.task_id}: submit the raw Output before you {action}")
+            raise AttemptError(f"Task {self.task_id}: submit the raw Output before you {action}")
         return self.raw

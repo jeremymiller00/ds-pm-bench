@@ -51,6 +51,11 @@ class SuiteUnavailable(Exception):
     """The requested Suite has no Tasks to cover, such as private Clearance but no Private Tasks."""
 
 
+class AttemptError(Exception):
+    """An Attempt refused an action: a Run whose Candidate is not manual-assisted, a Task
+    already recorded, a step out of order, or an Attempt already over."""
+
+
 class UnknownRunError(LookupError):
     """No Run with the requested id under runs/."""
 

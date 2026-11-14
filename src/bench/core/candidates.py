@@ -18,7 +18,7 @@ from typing import Any
 import yaml
 
 from bench.core.fields import FieldReader
-from bench.core.kinds import Clearance
+from bench.core.kinds import AdapterKind, Clearance
 
 CANDIDATES_FOLDER = "candidates"
 
@@ -102,13 +102,18 @@ class Candidate:
         return int(m.group("n")) if m else 1
 
     @property
+    def manual_assisted(self) -> bool:
+        """Whether a person works its Tasks by hand, pasting each Output back."""
+        return self.adapter == AdapterKind.MANUAL_ASSISTED
+
+    @property
     def task_cost_usd(self) -> float | None:
         """The cost to record for each Task a Run of it does by hand.
 
         The flat per-Task cost of a manual-assisted Candidate; None otherwise, which
         scoring treats as no per-Task cost. Automated cost comes from token prices.
         """
-        return self.cost_per_task_usd if self.adapter == "manual_assisted" else None
+        return self.cost_per_task_usd if self.manual_assisted else None
 
     @property
     def gate(self) -> GateReview | None:

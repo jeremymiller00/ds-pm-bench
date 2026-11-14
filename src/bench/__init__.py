@@ -3,6 +3,7 @@
 from bench.core.adapters import Clock, Editor, ExternalEditor, SystemClock
 from bench.core.attempts import Attempt
 from bench.core.errors import (
+    AttemptError,
     CandidateAuthoringError,
     ClearanceError,
     ConfigError,
@@ -25,6 +26,8 @@ from bench.core.verdicts import Comparison, Verdict
 from bench.core.workspace import Workspace
 
 __all__ = [
+    "Attempt",
+    "AttemptError",
     "CandidateAuthoringError",
     "Clock",
     "Comparison",
@@ -33,7 +36,6 @@ __all__ = [
     "Editor",
     "ExternalEditor",
     "GateNotPassed",
-    "Attempt",
     "RunExists",
     "RunIncomplete",
     "RunMismatch",

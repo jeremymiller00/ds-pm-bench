@@ -23,6 +23,7 @@ from bench.core.candidates import (
 from bench.core.catalog import CATALOG
 from bench.core.decisions import log_verdict, read_log
 from bench.core.errors import (
+    AttemptError,
     CandidateAuthoringError,
     GateNotPassed,
     TaskAuthoringError,
@@ -31,7 +32,7 @@ from bench.core.errors import (
     UnknownTaskError,
 )
 from bench.core.fields import FieldReader
-from bench.core.kinds import Clearance, Suite
+from bench.core.kinds import AdapterKind, Clearance, Suite
 from bench.core.lookup import find_by_id
 from bench.core.manual_time import ManualTimeStopwatch
 from bench.core.prices import PriceTable, load_prices
@@ -480,12 +481,20 @@ class Workspace:
         """Begin working a Task of the Run by hand: returns the Attempt showing its
         Canonical Prompt and input, with the clock started.
 
-        Clearance is checked before any content is read (ClearanceError). A Task whose
-        Output is already recorded cannot be begun again (ValueError).
+        Only a Run of a manual-assisted Candidate can be worked by hand (AttemptError).
+        The latest Gate and Clearance are checked before any content is read
+        (GateNotPassed, ClearanceError). A Task whose Output is already recorded cannot
+        be begun again (AttemptError).
         """
+        if not run.candidate.manual_assisted:
+            raise AttemptError(
+                f"Run {run.id}: Candidate {run.candidate_id} is {run.candidate.adapter}, "
+                f"so its Tasks cannot be worked by hand; only {AdapterKind.MANUAL_ASSISTED} "
+                "Candidates can"
+            )
         prompt = self.task_input(run, task_id)
         if task_id not in run.pending:
-            raise ValueError(f"Run {run.id}: Task {task_id}'s Output is already recorded")
+            raise AttemptError(f"Run {run.id}: Task {task_id}'s Output is already recorded")
         return Attempt(run, task_id, prompt, self.clock, self.editor)
 
     def run_ids(self) -> tuple[str, ...]:

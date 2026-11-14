@@ -191,7 +191,8 @@ async def test_suite_choice_is_offered_only_where_clearance_allows(
     configure_private_root(ws_dir, private)
     write_task(private, "T1.2")
     write_task(ws_dir, "T2.1", track="Specs", gold="TODO: write the Gold Answer")
-    write_candidate(ws_dir, "claude@opus-5-5", candidate())  # public_and_private
+    write_candidate(ws_dir, "claude@opus-5-5",  # public_and_private
+                    candidate(adapter="manual_assisted", env_vars=[]))
 
     app = BenchApp(Workspace.open(ws_dir, clock=clock))
     async with app.run_test() as pilot:
@@ -274,3 +275,16 @@ async def test_a_placeholder_manual_time_is_timed_with_a_stopwatch(
     assert "T2.1 Manual Time recorded: 25.5 minutes" in status
     assert left == 0
     assert Workspace.open(ws_dir).task("T2.1").manual_time_minutes == 25.5
+
+
+async def test_only_manual_assisted_candidates_are_offered_for_a_run(ws_dir: Path, clock):
+    automated = candidate(tool="Api", version="1", baseline=False)
+    write_candidate(ws_dir, "api@1", automated)
+
+    app = BenchApp(Workspace.open(ws_dir, clock=clock))
+    async with app.run_test() as pilot:
+        await open_runs(app, pilot)
+        offered = [value for _, value in app.query_one("#run-candidate", Select)._options]
+
+    assert CANDIDATE in offered
+    assert "api@1" not in offered

@@ -18,6 +18,7 @@ from textual.widgets.option_list import Option
 
 from bench.core.attempts import Attempt
 from bench.core.errors import (
+    AttemptError,
     ClearanceError,
     ConfigError,
     GateNotPassed,
@@ -34,13 +35,13 @@ from bench.core.workspace import Workspace
 
 # What the Workspace refuses when starting or resuming a Run, shown inline.
 RUN_ERRORS = (
+    AttemptError,
     ClearanceError,
     GateNotPassed,
     RunExists,
     RunMismatch,
     SuiteUnavailable,
     UnknownRunError,
-    ValueError,
 )
 
 
@@ -58,7 +59,10 @@ class RunsPane(Vertical):
         self.run: Run | None = None
 
     def compose(self) -> ComposeResult:
-        candidates = [(c.id, c.id) for c in self.workspace.current_candidates]
+        # A Run here is worked by hand, so only manual-assisted Candidates are offered.
+        candidates = [
+            (c.id, c.id) for c in self.workspace.current_candidates if c.manual_assisted
+        ]
         with Horizontal(id="run-controls"):
             yield Select(candidates, prompt="Candidate", id="run-candidate")
             yield Select(
@@ -262,7 +266,7 @@ class ManualTaskScreen(Screen[OutputRecord | None]):
         raw = self.query_one("#task-raw", TextArea)
         try:
             self.attempt.submit_raw(raw.text)
-        except ValueError as exc:
+        except AttemptError as exc:
             self._error(str(exc))
             return
         raw.read_only = True
@@ -279,7 +283,7 @@ class ManualTaskScreen(Screen[OutputRecord | None]):
         final = self.query_one("#task-draft", TextArea).text
         try:
             record = self.attempt.finish(final)
-        except ValueError as exc:
+        except AttemptError as exc:
             self._error(str(exc))
             return
         self.dismiss(record)
@@ -288,7 +292,7 @@ class ManualTaskScreen(Screen[OutputRecord | None]):
         s = self.attempt
         try:
             s.resume() if s.paused else s.pause()
-        except ValueError as exc:
+        except AttemptError as exc:
             self._error(str(exc))
             return
         self.query_one("#task-draft", TextArea).read_only = s.paused
@@ -300,7 +304,7 @@ class ManualTaskScreen(Screen[OutputRecord | None]):
             self.attempt.check_editable()  # refuse before giving up the terminal
             with self.app.suspend():
                 draft = self.attempt.edit_externally()
-        except (ValueError, SuspendNotSupported, subprocess.CalledProcessError) as exc:
+        except (AttemptError, SuspendNotSupported, subprocess.CalledProcessError) as exc:
             self._error(str(exc))
             return
         self.query_one("#task-draft", TextArea).text = draft

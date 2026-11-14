@@ -4,7 +4,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from bench import ClearanceError, GateNotPassed, Workspace
+from bench import AttemptError, ClearanceError, GateNotPassed, Workspace
 from test_workspace_candidate_authoring import CHECKLIST
 from test_workspace_candidates import candidate, write_candidate
 from test_workspace_tasks import configure_private_root, write_task
@@ -117,17 +117,17 @@ def test_pausing_is_only_for_editing_and_cannot_be_doubled(ws_dir: Path, clock: 
     ws = open_ws(ws_dir, clock)
     attempt = ws.begin_manual_task(ws.start_run(CANDIDATE, on=DAY), "T1.1")
 
-    with pytest.raises(ValueError, match="raw Output"):
+    with pytest.raises(AttemptError, match="raw Output"):
         attempt.pause()
-    with pytest.raises(ValueError, match="raw Output"):
+    with pytest.raises(AttemptError, match="raw Output"):
         attempt.finish("final")
     attempt.submit_raw("raw")
-    with pytest.raises(ValueError, match="already"):
+    with pytest.raises(AttemptError, match="already"):
         attempt.submit_raw("again")
-    with pytest.raises(ValueError, match="not paused"):
+    with pytest.raises(AttemptError, match="not paused"):
         attempt.resume()
     attempt.pause()
-    with pytest.raises(ValueError, match="already paused"):
+    with pytest.raises(AttemptError, match="already paused"):
         attempt.pause()
 
 
@@ -172,7 +172,7 @@ def test_the_external_editor_cannot_be_opened_while_paused(ws_dir: Path, clock: 
     attempt.submit_raw("raw")
     attempt.pause()
 
-    with pytest.raises(ValueError, match="paused"):
+    with pytest.raises(AttemptError, match="paused"):
         attempt.edit_externally()
     assert editor.opened_with == []
 
@@ -196,7 +196,7 @@ def test_abandoning_records_nothing_and_the_task_can_be_redone(ws_dir: Path, clo
     assert run.pending == ("T1.1",)
     assert not (run.folder / "results").exists()
     assert not (run.folder / "raw").exists()
-    with pytest.raises(ValueError, match="abandoned"):
+    with pytest.raises(AttemptError, match="abandoned"):
         first.finish("late")
 
     clock.advance(1000)
@@ -217,9 +217,9 @@ def test_a_finished_task_cannot_be_begun_or_finished_again(ws_dir: Path, clock: 
     attempt.submit_raw("raw")
     attempt.finish("final")
 
-    with pytest.raises(ValueError, match="finished"):
+    with pytest.raises(AttemptError, match="finished"):
         attempt.finish("again")
-    with pytest.raises(ValueError, match="already recorded"):
+    with pytest.raises(AttemptError, match="already recorded"):
         ws.begin_manual_task(ws.resume_run(run.id), "T1.1")
 
 
@@ -320,4 +320,18 @@ def test_a_failed_gate_stops_an_open_run_beginning_a_task(ws_dir: Path, clock: F
                    passed=False, clearance=None)
 
     with pytest.raises(GateNotPassed):
+        ws.begin_manual_task(run, "T1.1")
+
+
+def test_a_run_of_an_automated_candidate_cannot_be_worked_by_hand(
+    workspace_dir: Path, clock: FakeClock
+):
+    write_task(workspace_dir, "T1.1")
+    data = candidate(adapter="automated", baseline=True)
+    data["gate"]["clearance"] = "public_only"
+    write_candidate(workspace_dir, "api@1", data)
+    ws = open_ws(workspace_dir, clock)
+    run = ws.start_run("api@1", on=DAY)
+
+    with pytest.raises(AttemptError, match="manual_assisted"):
         ws.begin_manual_task(run, "T1.1")
