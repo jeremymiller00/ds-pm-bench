@@ -49,12 +49,18 @@ The API key is read from the first name in `env_vars`, from the environment or e
 git-ignored `.env` at the repo root (ADR 0005). Prices come from `config/prices.yaml`,
 keyed by model id; a model with no price gets a null cost.
 
+The CLI and TUI open the Workspace through `bench.wiring.open_workspace`, which wires in
+the provider SDKs; the core never imports them, and a `Workspace.open` without Adapters
+or judge models refuses only when a Task is sent or a Run judged.
+
 `Workspace.run_automated_task(run, task_id)` sends one Task, retrying once on a tool
-error, and stores the raw Output pending its edit pass; a Task that errored twice
-stores nothing and can be sent again later. `Workspace.begin_edit_pass(run, task_id)`
-returns an Attempt with the raw Output already in: edit, pause and `$EDITOR` work as
-for manual Attempts, and finishing records the editing time as active seconds with
-the API call's latency and cost. The live smoke tests are skipped unless you opt in:
+error, and keeps the raw Output as a Returned Output, ready to edit;
+`Workspace.sendable_tasks(run)` lists the Tasks it would send. A Task that errored twice
+stores nothing and can be sent again later. `Workspace.begin_attempt(run, task_id)`
+begins an Attempt of either kind, chosen by the Candidate's Adapter: for an automated
+Candidate it starts with the Returned Output already in, edit, pause and `$EDITOR` work
+as for manual Attempts, and finishing records the editing time as active seconds with
+the successful call's latency, cost, model, tokens and tries. The live smoke tests are skipped unless you opt in:
 
 ```sh
 BENCH_LIVE=1 ANTHROPIC_API_KEY=... BENCH_LIVE_ANTHROPIC_MODEL=<model id> uv run pytest -m live
@@ -66,14 +72,14 @@ In the TUI's Tasks tab, `e` edits the highlighted Task and `n` scaffolds a new o
 Saving shows the Task's version, and whether the edit made a new one because a Run
 used the old (ADR 0003). Validation errors appear inline in the form.
 
-In the Runs tab, a Run of an automated Candidate gets **Send pending Tasks**: each Task
-with no raw Output yet is sent in the background, and a Task that errored twice is
+In the Runs tab, a Run of an automated Candidate gets **Send Tasks**: each pending Task
+with no Returned Output yet is sent in the background, and a Task that errored twice is
 listed as failed; pressing it again retries only those. Enter on a Task whose raw
 Output is ready opens the Task screen with it in, to edit and save with `ctrl+s`
-(abandoning keeps the raw Output). **Judge Run** shows the Judge Setup and its hash and,
+(abandoning keeps the raw Output). **Judge Run**, enabled once the Run is finished, shows the Judge Setup and its hash and,
 until Certification exists, judges only through an explicit override that is logged to
-the Decision Log; it then lists each Task's Criterion scores with every Judge's reason,
-panel disagreements and same-family bias warnings.
+the Decision Log; it then lists each Task's Criterion scores with every judge model's reason,
+Panel disagreements and same-family bias warnings.
 
 ### 1. Record a Run from results files
 
@@ -167,21 +173,22 @@ mode: single                 # single: exactly one model; panel: two or more
 clearance: public_only       # or public_and_private, to judge Private Tasks
 prompt: config/judge/prompt.md
 models:
-  - provider: openai         # openai or anthropic
+  - provider: openai         # openai or anthropic (google: no SDK wired yet)
     model: gpt-6-astra
     env_var: OPENAI_API_KEY  # optional, default <PROVIDER>_API_KEY; env, else .env
   # - {provider: anthropic, model: ..., family: [chatbot]}
   #   family: optional, the Candidate tools of this model's family
 ```
 
-Each Judge is asked for JSON in its provider's structured-output mode (a JSON Schema
+Each judge model is asked for JSON in its provider's structured-output mode (a JSON Schema
 naming every Criterion). The key's `env_var` is not part of the hash.
 Its hash covers the models and the prompt, so editing either is a new Judge Setup.
-`Workspace.judge_run(run, allow_uncertified=True)` scores every recorded, unscored
-Output blind; until certification lands every Judge Setup is uncertified, so the
-override is required and each one is logged to the Decision Log. A Judge that is the
-Candidate under test is refused, and a same-family Judge marks Tasks for a full human
-check.
+`Workspace.judge_run(run, allow_uncertified=True)` scores every unscored Output of a
+finished Run blind; until certification lands every Judge Setup is uncertified, so the
+override is required, and it is logged to the Decision Log once a Task is judged (once
+per Run and Judge Setup). A judge model that is the model the Candidate calls (same
+provider and model id) is refused, and a same-family judge model marks Tasks for a full
+human check. Every refusal is a `JudgingError`.
 
 ### Golden fixtures
 
