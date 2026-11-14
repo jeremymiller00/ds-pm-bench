@@ -23,6 +23,11 @@ workspace needs `config/`, Tasks under `tasks/` or `examples/`, and Candidates u
 `candidates/` with exactly one marked `baseline: true`. Each Task's `track` must be
 one of the `tracks` listed in `config/settings.yaml`.
 
+A pre-commit hook (`scripts/check_public_tasks.py`, a `repo: local` hook) warns,
+without blocking, when a staged Public Task's input or Gold Answer holds an email address
+or matches a `public_denylist` pattern (case-insensitive regular expressions) in the
+git-ignored `config/local.yaml`; install the hooks once with `uvx pre-commit install`.
+
 Private Tasks (ADR 0006) are read from private roots listed in `config/local.yaml`,
 which is git-ignored because the paths are machine-specific. Copy
 `config/local.example.yaml` to start; without it no Private Tasks load.

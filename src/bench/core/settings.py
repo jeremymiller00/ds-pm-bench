@@ -1,11 +1,14 @@
 """Benchmark settings: config/settings.yaml, plus the machine-specific config/local.yaml.
 
 settings.yaml is public: Tracks, weights, margins, bands. local.yaml is git-ignored and
-optional: the private root paths (ADR-0006), which are home paths not worth publishing.
+optional: the private root paths (ADR-0006), which are home paths not worth publishing,
+and public_denylist, patterns the pre-commit check warns about in Public Tasks (story
+69), which would themselves name what is internal.
 """
 
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -18,7 +21,7 @@ from bench.core.fields import FieldReader
 
 SETTINGS_FILE = "config/settings.yaml"
 LOCAL_FILE = "config/local.yaml"
-LOCAL_FIELDS = ("private_roots",)
+LOCAL_FIELDS = ("private_roots", "public_denylist")
 
 DIMENSIONS = ("quality", "edit_distance", "time_saved", "cost_latency")
 
@@ -56,6 +59,9 @@ class Settings:
     calibration: CalibrationThresholds
     normalization: dict[str, Band]
     private_roots: tuple[Path, ...]
+    # config/local.yaml: case-insensitive regular expressions a Public Task's input or
+    # Gold Answer should never match (story 69).
+    public_denylist: tuple[str, ...] = ()
 
 
 # The settings update_settings can change; mappings among them merge by key.
@@ -135,26 +141,49 @@ def _parse(f: FieldReader, root: Path, data: dict[str, Any]) -> Settings:
             min_items=min_items,
         ),
         normalization=_normalization(f, data.get("normalization")),
-        private_roots=_load_private_roots(root),
+        private_roots=_load_local(root).get("private_roots", ()),
+        public_denylist=load_public_denylist(root),
     )
 
 
-def _load_private_roots(root: Path) -> tuple[Path, ...]:
-    """The private roots in config/local.yaml; none when the file is absent."""
+def load_public_denylist(root: Path) -> tuple[str, ...]:
+    """The public_denylist patterns in config/local.yaml; none when absent."""
+    return _load_local(root).get("public_denylist", ())
+
+
+def _load_local(root: Path) -> dict[str, Any]:
+    """config/local.yaml's validated fields; empty when the file is absent or blank."""
     if not (root / LOCAL_FILE).is_file():
-        return ()
+        return {}
     f = FieldReader(LOCAL_FILE)
     try:
         empty = yaml.safe_load((root / LOCAL_FILE).read_text()) is None
     except yaml.YAMLError:
         empty = False  # f.read reports it, naming the file
     if empty:
-        return ()  # blank or comments only, such as a fresh copy of the example
+        return {}  # blank or comments only, such as a fresh copy of the example
     data = f.read(root)
     for key in data:
         if key not in LOCAL_FIELDS:
             raise f.fail(str(key), f"unknown, expected one of {', '.join(LOCAL_FIELDS)}")
-    return _private_roots(f, root, data.get("private_roots", []))
+    return {
+        "private_roots": _private_roots(f, root, data.get("private_roots", [])),
+        "public_denylist": _denylist(f, data.get("public_denylist", [])),
+    }
+
+
+def _denylist(f: FieldReader, value: Any) -> tuple[str, ...]:
+    if not isinstance(value, list):
+        raise f.fail("public_denylist", "must be a list of regular expressions")
+    patterns = []
+    for i, entry in enumerate(value):
+        pattern = f.text(entry, f"public_denylist[{i}]")
+        try:
+            re.compile(pattern)
+        except re.error as exc:
+            raise f.fail(f"public_denylist[{i}]", f"not a regular expression: {exc}") from None
+        patterns.append(pattern)
+    return tuple(patterns)
 
 
 def _tracks(f: FieldReader, value: Any) -> tuple[str, ...]:

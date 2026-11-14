@@ -6,3 +6,11 @@
 #
 # private_roots:
 #   - ../ds-pm-bench-private
+#
+# Patterns the pre-commit check warns about in a Public Task's input or Gold Answer
+# (case-insensitive regular expressions), besides email addresses. They name what is
+# internal, which is why they live here and not in the public repo.
+#
+# public_denylist:
+#   - internal\.example-corp\.com
+#   - project\s+falcon
