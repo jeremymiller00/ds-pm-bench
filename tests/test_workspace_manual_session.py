@@ -4,7 +4,8 @@ from pathlib import Path
 import pytest
 import yaml
 
-from bench import ClearanceError, Workspace
+from bench import ClearanceError, GateNotPassed, Workspace
+from test_workspace_candidate_authoring import CHECKLIST
 from test_workspace_candidates import candidate, write_candidate
 from test_workspace_tasks import configure_private_root, write_task
 
@@ -285,3 +286,38 @@ def test_a_manual_time_stopwatch_records_the_minutes_it_ran(
 
     assert task.manual_time_minutes == 25.6
     assert Workspace.open(workspace_dir).task("T1.1").manual_time_minutes == 25.6
+
+
+def test_a_narrowed_gate_stops_private_input_to_an_open_run(
+    workspace_dir: Path, clock: FakeClock, tmp_path: Path
+):
+    private = tmp_path / "bench-private"
+    write_task(workspace_dir, "T1.1")
+    write_task(private, "T3.1", track="Prioritize")
+    configure_private_root(workspace_dir, private)
+    write_candidate(workspace_dir, CANDIDATE,
+                    candidate(adapter="manual_assisted", env_vars=[], baseline=True))
+    ws = open_ws(workspace_dir, clock)
+    run = ws.start_run(CANDIDATE, on=DAY)  # cleared for public and private
+
+    ws.record_gate(CANDIDATE, reviewer="A. Nother", on=DAY, checklist=CHECKLIST,
+                   passed=True, clearance="public_only")
+
+    with pytest.raises(ClearanceError, match="T3.1"):
+        ws.task_input(run, "T3.1")
+    with pytest.raises(ClearanceError, match="T3.1"):
+        ws.begin_manual_task(run, "T3.1")
+    with pytest.raises(ClearanceError):
+        ws.resume_run(run.id)
+    assert ws.task_input(run, "T1.1")
+
+
+def test_a_failed_gate_stops_an_open_run_beginning_a_task(ws_dir: Path, clock: FakeClock):
+    ws = open_ws(ws_dir, clock)
+    run = ws.start_run(CANDIDATE, on=DAY)
+
+    ws.record_gate(CANDIDATE, reviewer="A. Nother", on=DAY, checklist=CHECKLIST,
+                   passed=False, clearance=None)
+
+    with pytest.raises(GateNotPassed):
+        ws.begin_manual_task(run, "T1.1")

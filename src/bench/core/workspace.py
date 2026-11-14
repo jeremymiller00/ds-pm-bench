@@ -340,20 +340,26 @@ class Workspace:
         passed: bool,
         clearance: Clearance | str | None,
     ) -> Candidate:
-        """Record the Candidate's Gate review, replacing any earlier one.
+        """Add a review to the Candidate's Gate; the latest review applies (ADR-0003).
 
+        The Gate is a review record, not part of what a Run freezes, so it is updated in
+        place, even on a used Candidate, and every earlier review is kept. The review
+        applies at once to every Run of the Candidate, including one in progress.
         checklist holds retention (text), sso (bool), enterprise_terms (bool) and
         connector_support (text). A passing Gate needs a Clearance; a failed one grants
         none, and appends a reject Verdict to the Decision Log dated on (story 18).
         Invalid fields raise ConfigError naming the field and change nothing.
         """
-        candidate = self._changeable(candidate_id)
+        candidate = self.candidate(candidate_id)
         f = FieldReader(f"{CANDIDATES_FOLDER}/{candidate.id}.yaml")
-        gate = gate_data(
+        review = gate_data(
             f, reviewer=reviewer, on=on, checklist=checklist, passed=passed,
             clearance=clearance,
         )
-        gated = self._change(candidate, {"gate": gate})
+        reviews = candidate_data(candidate)["gate"]
+        self._write(candidate, gate=[*reviews, review])
+        self._reload_candidates()
+        gated = self.candidate(candidate.id)
         if not gated.gate_passed:
             self.log_verdict(self.gate_verdict(gated.id), on=on)
         return gated
@@ -386,8 +392,9 @@ class Workspace:
     def _superseding(self, candidate: Candidate) -> Candidate | None:
         return max(
             (c for c in self.candidates
-             if c.lineage == candidate.lineage and c.revision > candidate.revision),
-            key=lambda c: c.revision,
+             if c.lineage == candidate.lineage
+             and c.lineage_position > candidate.lineage_position),
+            key=lambda c: c.lineage_position,
             default=None,
         )
 
@@ -405,7 +412,7 @@ class Workspace:
         if candidate.id not in candidate_ids_used(self.root):
             changed = self._write(candidate, **changes)
         else:
-            revision_id = f"{candidate.lineage}~{candidate.revision + 1}"
+            revision_id = f"{candidate.lineage}~{candidate.lineage_position + 1}"
             data = candidate_data(candidate)
             data.update(changes)
             changed = write_candidate(self.root, revision_id, data)
@@ -444,10 +451,16 @@ class Workspace:
     def task_input(self, run: Run, task_id: str) -> str:
         """The Canonical Prompt and input of a Task in the Run's Suite.
 
+        The Candidate's latest Gate review applies, even to a Run already open: a failed
+        Gate raises GateNotPassed and a narrowed one ClearanceError (ADR-0003).
+
         A Task the Workspace has but the Candidate is not cleared for raises
         ClearanceError before any of its content is read; one it lacks is unknown.
         """
-        check_clearance(run.candidate, self.task(task_id))
+        task = self.task(task_id)
+        candidate = self.candidate(run.candidate_id)  # its latest Gate review applies
+        check_gate(candidate)
+        check_clearance(candidate, task)
         return run.task_input(task_id)
 
     def begin_manual_task(self, run: Run, task_id: str) -> ManualSession:

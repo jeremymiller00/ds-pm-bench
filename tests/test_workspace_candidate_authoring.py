@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from bench import CandidateAuthoringError, ConfigError, Workspace
+from bench import CandidateAuthoringError, ConfigError, GateNotPassed, Workspace
 from test_workspace_tasks import write_task
 
 DAY = datetime.date(2026, 11, 13)
@@ -39,7 +39,7 @@ def test_a_new_candidate_is_written_to_candidates_and_loads_back(workspace_dir: 
     assert (c.tool, c.version, c.adapter) == ("Claude", "claude-opus-5-5", "automated")
     assert c.settings == {"temperature": 0.2}
     assert c.env_vars == ("ANTHROPIC_API_KEY",)
-    assert (c.baseline, c.gate, c.revision) == (True, None, 1)
+    assert (c.baseline, c.gate, c.lineage_position) == (True, None, 1)
     assert ws.candidate(c.id) == c
     assert Workspace.open(workspace_dir).candidate(c.id) == c
 
@@ -215,18 +215,18 @@ def test_an_unused_candidate_is_changed_in_place(workspace_dir: Path):
 
     changed = ws.update_candidate(c.id, settings={"temperature": 0.7})
 
-    assert (changed.id, changed.revision) == (c.id, 1)
+    assert (changed.id, changed.lineage_position) == (c.id, 1)
     assert changed.settings == {"temperature": 0.7}
     assert [x.id for x in Workspace.open(workspace_dir).candidates] == [c.id]
 
 
-def test_changing_a_used_candidate_makes_a_new_revision(workspace_dir: Path, used):
+def test_changing_a_used_candidate_adds_a_candidate_to_its_lineage(workspace_dir: Path, used):
     ws, c, run = used
     before = (workspace_dir / "candidates" / f"{c.id}.yaml").read_text()
 
     changed = ws.update_candidate(c.id, settings={"temperature": 0.7})
 
-    assert (changed.id, changed.revision, changed.lineage) == (f"{c.id}~2", 2, c.id)
+    assert (changed.id, changed.lineage_position, changed.lineage) == (f"{c.id}~2", 2, c.id)
     assert changed.settings == {"temperature": 0.7}
     assert (changed.tool, changed.version) == (c.tool, c.version)
     assert changed.gate == c.gate
@@ -237,7 +237,7 @@ def test_changing_a_used_candidate_makes_a_new_revision(workspace_dir: Path, use
     assert ws.resume_run(run.id).candidate.id == c.id
 
 
-def test_a_new_revision_of_the_baseline_takes_the_baseline_mark(used):
+def test_the_next_candidate_in_the_baselines_lineage_takes_the_baseline_mark(used):
     ws, c, _ = used
 
     changed = ws.update_candidate(c.id, env_vars=["OTHER_KEY"])
@@ -246,21 +246,36 @@ def test_a_new_revision_of_the_baseline_takes_the_baseline_mark(used):
     assert not ws.candidate(c.id).baseline
 
 
-def test_regating_a_used_candidate_makes_a_new_revision(workspace_dir: Path, used):
+def test_regating_a_used_candidate_updates_its_gate_in_place(workspace_dir: Path, used):
     ws, c, run = used
+    later = DAY + datetime.timedelta(days=1)
 
     regated = ws.record_gate(
-        c.id, reviewer="A. Nother", on=DAY, checklist=CHECKLIST, passed=False,
+        c.id, reviewer="A. Nother", on=later, checklist=CHECKLIST, passed=False,
         clearance=None,
     )
 
-    assert regated.id == f"{c.id}~2" and regated.gate.result == "fail"
-    assert ws.candidate(c.id).gate_passed
-    assert ws.resume_run(run.id).candidate.gate_passed
-    assert [e["candidate"]["id"] for e in ws.decision_log()] == [regated.id]
+    assert regated.id == c.id and regated.lineage_position == 1
+    assert [x.id for x in Workspace.open(workspace_dir).candidates] == [c.id]
+    assert regated.gate.result == "fail" and regated.gate.date == later
+    assert [(r.reviewer, r.result) for r in regated.gate_reviews] == [
+        ("J. Reviewer", "pass"), ("A. Nother", "fail"),
+    ]
+    assert Workspace.open(workspace_dir).candidate(c.id).gate_reviews == regated.gate_reviews
 
 
-def test_revisions_number_on_from_the_highest(used):
+def test_a_failed_gate_stops_a_run_in_progress(workspace_dir: Path, used):
+    ws, c, run = used
+    ws.record_gate(c.id, reviewer="A. Nother", on=DAY, checklist=CHECKLIST,
+                   passed=False, clearance=None)
+
+    with pytest.raises(GateNotPassed):
+        ws.resume_run(run.id)
+    with pytest.raises(GateNotPassed):
+        ws.task_input(run, "T1.1")
+
+
+def test_lineage_positions_number_on_from_the_highest(used):
     ws, c, _ = used
     second = ws.update_candidate(c.id, settings={"temperature": 0.7})
     ws.start_run(second.id, on=DAY + datetime.timedelta(days=1))
@@ -271,14 +286,24 @@ def test_revisions_number_on_from_the_highest(used):
     assert [x.id for x in ws.current_candidates] == [third.id]
 
 
-def test_a_superseded_revision_cannot_be_changed(used):
+def test_a_superseded_candidate_cannot_be_changed(used):
     ws, c, _ = used
     newer = ws.update_candidate(c.id, settings={"temperature": 0.7})
 
     with pytest.raises(CandidateAuthoringError, match=f"superseded by {newer.id}"):
         ws.update_candidate(c.id, settings={"temperature": 0.9})
-    with pytest.raises(CandidateAuthoringError, match="superseded"):
-        gated(ws, c.id)
+
+
+def test_a_superseded_candidate_can_still_be_regated(used):
+    """Its Gate is a review of it, so failing it stops a Run of it still in progress."""
+    ws, c, run = used
+    ws.update_candidate(c.id, settings={"temperature": 0.7})
+
+    ws.record_gate(c.id, reviewer="A. Nother", on=DAY, checklist=CHECKLIST,
+                   passed=False, clearance=None)
+
+    with pytest.raises(GateNotPassed):
+        ws.resume_run(run.id)
 
 
 @pytest.mark.parametrize("field", ["tool", "version", "baseline", "gate", "id"])

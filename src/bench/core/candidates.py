@@ -56,7 +56,9 @@ _SECRET_KEY = re.compile(r"(^|_)(api_?key|key|secret|password|token|credentials?
 
 
 @dataclass(frozen=True)
-class Gate:
+class GateReview:
+    """One dated review of a Candidate's Gate. The latest review is the one that applies."""
+
     reviewer: str
     date: datetime.date
     retention: str
@@ -65,6 +67,10 @@ class Gate:
     connector_support: str
     result: str  # "pass" or "fail"
     clearance: Clearance | None  # None when failed
+
+    @property
+    def passed(self) -> bool:
+        return self.result == "pass"
 
 
 @dataclass(frozen=True)
@@ -76,7 +82,8 @@ class Candidate:
     settings: dict[str, Any]
     env_vars: tuple[str, ...]
     baseline: bool
-    gate: Gate | None  # None until the Gate review is recorded
+    # The Gate: every review, oldest first, append-only; empty until the first one.
+    gate_reviews: tuple[GateReview, ...]
     # A manual-assisted Candidate's flat cost per Task, such as a subscription's share.
     cost_per_task_usd: float | None = None
 
@@ -87,7 +94,7 @@ class Candidate:
         return m.group("lineage") if m else self.id
 
     @property
-    def revision(self) -> int:
+    def lineage_position(self) -> int:
         """1 for <tool>@<version>; n for <tool>@<version>~<n>."""
         m = _REVISION.match(self.id)
         return int(m.group("n")) if m else 1
@@ -102,8 +109,13 @@ class Candidate:
         return self.cost_per_task_usd if self.adapter == "manual_assisted" else None
 
     @property
+    def gate(self) -> GateReview | None:
+        """The latest Gate review, which applies; None until one is recorded."""
+        return self.gate_reviews[-1] if self.gate_reviews else None
+
+    @property
     def gate_passed(self) -> bool:
-        return self.gate is not None and self.gate.result == "pass"
+        return self.gate is not None and self.gate.passed
 
     @property
     def clearance(self) -> Clearance | None:
@@ -155,17 +167,22 @@ def candidate_data(c: Candidate) -> dict[str, Any]:
     if c.cost_per_task_usd is not None:
         data["cost_per_task_usd"] = c.cost_per_task_usd
     data["baseline"] = c.baseline
-    data["gate"] = None if c.gate is None else {
-        "reviewer": c.gate.reviewer,
-        "date": c.gate.date.isoformat(),
-        "retention": c.gate.retention,
-        "sso": c.gate.sso,
-        "enterprise_terms": c.gate.enterprise_terms,
-        "connector_support": c.gate.connector_support,
-        "result": c.gate.result,
-        "clearance": None if c.gate.clearance is None else str(c.gate.clearance),
-    }
+    data["gate"] = [_review_data(r) for r in c.gate_reviews]
     return data
+
+
+def _review_data(r: GateReview) -> dict[str, Any]:
+    """A Gate review as a Candidate file holds it."""
+    return {
+        "reviewer": r.reviewer,
+        "date": r.date.isoformat(),
+        "retention": r.retention,
+        "sso": r.sso,
+        "enterprise_terms": r.enterprise_terms,
+        "connector_support": r.connector_support,
+        "result": r.result,
+        "clearance": None if r.clearance is None else str(r.clearance),
+    }
 
 
 def gate_data(
@@ -220,7 +237,7 @@ def parse_candidate(f: FieldReader, candidate_id: str, data: dict[str, Any]) -> 
         settings=_settings(f, data.get("settings", {})),
         env_vars=_env_vars(f, data.get("env_vars", [])),
         baseline=f.boolean(data.get("baseline", False), "baseline"),
-        gate=None if data.get("gate") is None else _gate(f, data["gate"]),
+        gate_reviews=_gate_reviews(f, data.get("gate")),
         cost_per_task_usd=cost,
     )
 
@@ -247,7 +264,17 @@ def _env_vars(f: FieldReader, value: Any) -> tuple[str, ...]:
     return tuple(value)
 
 
-def _gate(f: FieldReader, value: Any) -> Gate:
+def _gate_reviews(f: FieldReader, value: Any) -> tuple[GateReview, ...]:
+    """The Gate: a list of reviews, oldest first; a single mapping is read as one review,
+    and null or absent as none."""
+    if value is None:
+        return ()
+    if isinstance(value, list):
+        return tuple(_review(f, item) for item in value)
+    return (_review(f, value),)
+
+
+def _review(f: FieldReader, value: Any) -> GateReview:
     raw = f.mapping(value, "gate")
     for key in raw:
         if key not in GATE_FIELDS:
@@ -256,7 +283,7 @@ def _gate(f: FieldReader, value: Any) -> Gate:
     clearance = raw.get("clearance")
     if result == "pass" or clearance is not None:
         clearance = f.enum(clearance, "gate.clearance", Clearance)
-    return Gate(
+    return GateReview(
         reviewer=f.text(raw.get("reviewer"), "gate.reviewer"),
         date=f.date(raw.get("date"), "gate.date"),
         retention=f.text(raw.get("retention"), "gate.retention"),
