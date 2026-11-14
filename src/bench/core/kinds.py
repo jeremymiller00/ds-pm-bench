@@ -10,7 +10,7 @@ from enum import StrEnum
 
 
 class Clearance(StrEnum):
-    """What a Candidate's passing Gate lets it see (ADR-0004, ADR-0006)."""
+    """What a Candidate's passing Gate lets it see (ADR-0006)."""
 
     PUBLIC_ONLY = "public_only"
     PUBLIC_AND_PRIVATE = "public_and_private"

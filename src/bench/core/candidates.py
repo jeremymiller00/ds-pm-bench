@@ -1,4 +1,4 @@
-"""Candidates: candidates/<tool>@<version>.yaml, each with its Gate record (ADR-0003, ADR-0005).
+"""Candidates: candidates/<tool>@<version>.yaml, each with its Gate (ADR-0003, ADR-0006).
 
 A Candidate is frozen once a Run uses it; any change is a new file, the next Candidate
 in its Lineage, <tool>@<version>~<n>, and the used file stays as it was so its Runs
@@ -35,7 +35,8 @@ CANDIDATE_FIELDS = (
     "baseline",
     "gate",
 )
-# The Gate checklist a reviewer fills in (ADR-0005).
+# The Gate checklist a reviewer fills in for each review (ADR-0003, the review record);
+# a passing review also grants a Clearance (ADR-0006).
 GATE_CHECKLIST = ("retention", "sso", "enterprise_terms", "connector_support")
 GATE_FIELDS = (
     "reviewer",
