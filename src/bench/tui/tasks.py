@@ -1,4 +1,5 @@
-"""The Task browser: Tasks grouped by Track, one Task's details, and keys to edit or add Tasks."""
+"""The Task browser: Tasks grouped by Track, one Task's details, and keys to edit or add
+Tasks, or make a Private Task's public twin."""
 
 from __future__ import annotations
 
@@ -10,7 +11,7 @@ from textual.widgets import Static, Tree
 
 from bench.core.tasks import Task
 from bench.core.workspace import Workspace
-from bench.tui.task_editor import NewTaskScreen, TaskEditorScreen
+from bench.tui.task_editor import NewTaskScreen, PublicTwinScreen, TaskEditorScreen
 
 
 class TaskBrowser(Vertical):
@@ -22,6 +23,7 @@ class TaskBrowser(Vertical):
     BINDINGS = [
         Binding("e", "edit_task", "Edit Task"),
         Binding("n", "new_task", "New Task"),
+        Binding("t", "public_twin", "Public twin"),
     ]
 
     def __init__(self, workspace: Workspace) -> None:
@@ -91,6 +93,22 @@ class TaskBrowser(Vertical):
                 )
 
         self.app.push_screen(NewTaskScreen(self.workspace), created)
+
+    def action_public_twin(self) -> None:
+        task_id = self._highlighted_task()
+        if task_id is None:
+            self._status("Highlight a Private Task to make its public twin.")
+            return
+
+        def created(twin: Task | None) -> None:
+            if twin is not None:
+                self.refresh_tasks(select=twin.id)
+                self._status(
+                    f"{twin.id} created as a public twin of {task_id} in {twin.folder}; "
+                    "write its synthetic input and Gold Answer."
+                )
+
+        self.app.push_screen(PublicTwinScreen(self.workspace, task_id), created)
 
     def _status(self, message: str) -> None:
         self.query_one("#task-status", Static).update(message)

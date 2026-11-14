@@ -84,12 +84,19 @@ from bench.core.judging import (
     parse_reply,
     same_family,
 )
-from bench.core.kinds import AdapterKind, Clearance, Suite
+from bench.core.kinds import AdapterKind, Clearance, Suite, Visibility
 from bench.core.lookup import find_by_id
 from bench.core.manual_time import ManualTimeStopwatch
 from bench.core.prices import PriceTable, load_prices, remove_price, set_price
 from bench.core.results import TaskResult
-from bench.core.rubric import RUBRIC_FILE, Rubric, load_rubric, parse_rubric_edit, write_rubric
+from bench.core.rubric import (
+    RUBRIC_FILE,
+    Rubric,
+    criterion_dict,
+    load_rubric,
+    parse_rubric_edit,
+    write_rubric,
+)
 from bench.core.runs import (
     Run,
     SpotCheck,
@@ -109,6 +116,7 @@ from bench.core.scoring import RunScore, score_run
 from bench.core.settings import SETTINGS_FILE, Settings, edit_settings, load_settings
 from bench.core.spot_checks import spot_check_queue
 from bench.core.tasks import (
+    PLACEHOLDER,
     CriterionSpec,
     Task,
     TaskContext,
@@ -232,6 +240,30 @@ class Workspace:
         )
         self._reload_tasks()
         return task
+
+    def create_public_twin(self, private_task_id: str, new_id: str) -> Task:
+        """Scaffold a Public Task as the synthetic twin of a Private Task (story 79).
+
+        It copies only the shape: name, Track, Trap, Output Shape and task-specific
+        Criteria. Nothing that could quote the private content is copied: the input,
+        Gold Answer and Canonical Prompt start as placeholders, as does the Manual Time,
+        for the PM to write synthetic ones. A Public Task, or a taken id, raises
+        TaskAuthoringError and nothing is written.
+        """
+        source = self.task(private_task_id)
+        if source.visibility != Visibility.PRIVATE:
+            raise TaskAuthoringError(
+                f"Task {source.id} is already public; a twin is made of a Private Task"
+            )
+        return self.create_task(
+            new_id,
+            track=source.track,
+            trap=source.trap,
+            canonical_prompt=PLACEHOLDER,
+            criteria=[criterion_dict(c) for c in source.own_criteria],
+            name=source.name,
+            output_shape=source.output_shape,
+        )
 
     def update_task(self, task_id: str, **changes: Any) -> Task:
         """Edit a Task's fields: name, track, trap, output_shape, canonical_prompt,

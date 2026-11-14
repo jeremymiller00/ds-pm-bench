@@ -283,3 +283,36 @@ def test_a_new_task_can_be_given_a_name_and_output_shape(workspace_dir: Path):
 
     assert (task.name, task.output_shape) == ("Frame a churn ask", "A one-page frame.")
     assert ws.update_task("T1.1", output_shape="Two pages.").output_shape == "Two pages."
+
+
+def test_a_public_twin_copies_a_private_tasks_shape_but_none_of_its_content(
+    workspace_dir: Path, private_root: Path
+):
+    ws = Workspace.open(workspace_dir)
+    private = new_task(ws, "T2.1", track="Specs", private_root=private_root,
+                       name="Write a model spec", output_shape="One-page spec",
+                       canonical_prompt="Spec the churn model for Acme's Q3 launch.")
+    ws.update_task("T2.1", input="Acme's real Q3 numbers.", gold_answer="Acme spec.")
+
+    twin = ws.create_public_twin("T2.1", "T2.1-example")
+
+    assert twin.folder == workspace_dir / "tasks" / "T2.1-example"
+    assert twin.visibility == "public"
+    assert (twin.name, twin.track, twin.trap, twin.output_shape) == (
+        private.name, private.track, private.trap, private.output_shape)
+    assert twin.own_criteria == private.own_criteria
+    assert twin.version == 1
+    assert set(twin.placeholders) == {"input", "Gold Answer", "Manual Time",
+                                      "Canonical Prompt"}
+    written = "".join(p.read_text() for p in twin.folder.iterdir())
+    assert "Acme" not in written
+    assert ws.task("T2.1-example") == twin
+
+
+def test_only_a_private_task_gets_a_public_twin(workspace_dir: Path):
+    ws = Workspace.open(workspace_dir)
+    new_task(ws)
+
+    with pytest.raises(TaskAuthoringError, match="already public"):
+        ws.create_public_twin("T1.1", "T1.1-example")
+    assert not (workspace_dir / "tasks" / "T1.1-example").exists()

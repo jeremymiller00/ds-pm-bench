@@ -69,6 +69,10 @@ BENCH_LIVE=1 OPENAI_API_KEY=... uv run pytest -m live  # also judges examples/ o
 
 In the TUI's Tasks tab, `e` edits the highlighted Task and `n` scaffolds a new one
 (private only when a private root is configured); `ctrl+s` saves, `escape` cancels.
+`t` on a Private Task makes its public synthetic twin
+(`Workspace.create_public_twin(private_id, new_id)`): a Public Task with the same name,
+Track, Trap, Output Shape and task Criteria, and placeholders for everything that could
+quote the private content (input, Gold Answer, Canonical Prompt) and for Manual Time.
 Saving shows the Task's version, and whether the edit made a new one because a Run
 used the old (ADR 0003). Validation errors appear inline in the form.
 
