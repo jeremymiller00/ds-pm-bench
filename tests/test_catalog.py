@@ -134,3 +134,16 @@ def test_a_catalog_task_failing_mid_way_leaves_nothing_behind(
 
     assert "gap_list" in capsys.readouterr().err
     assert list(private_root.rglob("*")) == []
+
+
+def test_catalog_tasks_store_their_name_and_output_shape_through_an_edit(
+    workspace_dir: Path, private_root: Path
+):
+    scaffold(workspace_dir, private_root)
+    ws = Workspace.open(workspace_dir)
+
+    task = ws.update_task("T1.1", trap="A sharper trap.")
+
+    assert task.name == "Frame a vague product ask"
+    assert task.output_shape.startswith("AI Project Template")
+    assert Workspace.open(workspace_dir).task("T1.1") == task

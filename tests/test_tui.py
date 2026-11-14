@@ -352,3 +352,21 @@ async def test_create_edit_run_then_edit_bumps_the_version(workspace_dir: Path):
         status = str(app.query_one("#task-status", Static).content)
 
     assert "T2.1 saved as v2 (a new version: a Run used v1)" in status
+
+
+async def test_task_details_show_a_catalog_tasks_name_and_output_shape(
+    workspace_dir: Path, tmp_path: Path
+):
+    private = tmp_path / "private"
+    private.mkdir()
+    configure_private_root(workspace_dir, private)
+    Workspace.open(workspace_dir).scaffold_catalog(private)
+
+    app = BenchApp(Workspace.open(workspace_dir))
+    async with app.run_test() as pilot:
+        await pilot.press("down")
+        await pilot.pause()
+        text = str(app.query_one("#task-details", Static).content)
+
+    assert "Name: Frame a vague product ask" in text
+    assert "Output shape: AI Project Template" in text

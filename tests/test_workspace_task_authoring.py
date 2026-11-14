@@ -268,3 +268,18 @@ def test_an_edit_refusal_is_a_task_authoring_error(workspace_dir: Path):
 
     with pytest.raises(TaskAuthoringError):
         ws.update_task("T1.1", version=3)
+
+
+def test_a_task_outside_the_catalog_may_have_no_name_or_output_shape(workspace_dir: Path):
+    task = new_task(Workspace.open(workspace_dir))
+
+    assert (task.name, task.output_shape) == (None, None)
+
+
+def test_a_new_task_can_be_given_a_name_and_output_shape(workspace_dir: Path):
+    ws = Workspace.open(workspace_dir)
+
+    task = new_task(ws, name="Frame a churn ask", output_shape="A one-page frame.")
+
+    assert (task.name, task.output_shape) == ("Frame a churn ask", "A one-page frame.")
+    assert ws.update_task("T1.1", output_shape="Two pages.").output_shape == "Two pages."

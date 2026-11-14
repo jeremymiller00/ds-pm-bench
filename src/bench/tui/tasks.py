@@ -126,8 +126,14 @@ def task_details(task: Task) -> str:
         else f"{task.manual_time_minutes:g} minutes"
     )
     criteria = "\n".join(f"  - {c.id}: {c.name}" for c in task.rubric.criteria)
+    catalog = "".join(
+        f"{label}: {value}\n"
+        for label, value in (("Name", task.name), ("Output shape", task.output_shape))
+        if value is not None
+    )
     return (
         f"{task.id}\n\n"
+        f"{catalog}"
         f"Track: {task.track}\n"
         f"Visibility: {task.visibility}\n"
         f"Version: {task.version}\n"

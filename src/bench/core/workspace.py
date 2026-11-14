@@ -98,12 +98,15 @@ class Workspace:
         criteria: Iterable[CriterionSpec],
         manual_time_minutes: int | float | None = None,
         private_root: str | Path | None = None,
+        name: str | None = None,
+        output_shape: str | None = None,
     ) -> Task:
         """Scaffold a new Task at version 1 with a TODO input and Gold Answer.
 
         It is a Public Task under tasks/ unless private_root names one of the
         configured private roots (ADR-0006). criteria are the task-specific
-        Criteria, each {id, name, description}. Invalid fields raise ConfigError
+        Criteria, each {id, name, description}. name and output_shape are the
+        catalog's task name and Output shape, optional. Invalid fields raise ConfigError
         naming the field; a taken id or an unconfigured root raises
         TaskAuthoringError. Either way nothing is written.
         """
@@ -122,13 +125,15 @@ class Workspace:
             canonical_prompt=canonical_prompt,
             criteria=criteria,
             manual_time_minutes=manual_time_minutes,
+            name=name,
+            output_shape=output_shape,
         )
         self._reload_tasks()
         return task
 
     def update_task(self, task_id: str, **changes: Any) -> Task:
-        """Edit a Task's fields: track, trap, canonical_prompt, criteria,
-        manual_time_minutes, input (text) and gold_answer (text).
+        """Edit a Task's fields: name, track, trap, output_shape, canonical_prompt,
+        criteria, manual_time_minutes, input (text) and gold_answer (text).
 
         If any Run used the Task's current version, the edit is a new version;
         otherwise it is made in place (ADR-0003). Visibility, id and version cannot

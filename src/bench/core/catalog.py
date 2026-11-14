@@ -1,8 +1,9 @@
 """The 12 catalog Tasks (T1.1-T4.3), scaffolded as Private Tasks (ADR-0006).
 
-Only generic catalog data lives here: Track, task name, expected output, Trap and
-the task-specific Criteria. Inputs, Gold Answers, Manual Time and Canonical Prompts
-start as placeholders and are filled in the private root.
+Only generic catalog data lives here: Track, task name, Output shape, Trap and
+the task-specific Criteria; the name and Output shape are stored on each Task.
+Inputs, Gold Answers, Manual Time and Canonical Prompts start as placeholders and
+are filled in the private root.
 """
 
 from __future__ import annotations
@@ -19,7 +20,7 @@ class CatalogTask:
     track: str
     name: str
     input: str
-    expected_output: str
+    output_shape: str  # what the Output should look like
     trap: str
     criteria: tuple[Criterion, ...]  # the task-specific Criteria, one or two
 
@@ -30,11 +31,13 @@ class CatalogTask:
             "TODO: draft the Canonical Prompt.\n\n"
             f"Task: {self.name}\n"
             f"Input: {self.input}\n"
-            f"Expected output: {self.expected_output}\n"
+            f"Output shape: {self.output_shape}\n"
         )
 
     def create_args(self) -> dict[str, Any]:
         return dict(
+            name=self.name,
+            output_shape=self.output_shape,
             track=self.track,
             trap=self.trap,
             canonical_prompt=self.canonical_prompt,

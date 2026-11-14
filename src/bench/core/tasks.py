@@ -1,8 +1,9 @@
 """Tasks: one folder each, read from the public repo and from private roots (ADR-0006).
 
 A Task folder holds:
-  task.md      YAML frontmatter (id, track, trap, version, manual_time_minutes),
-               then the Canonical Prompt as the body
+  task.md      YAML frontmatter (id, track, trap, version, manual_time_minutes, and
+               for a catalog Task its name and output_shape), then the Canonical
+               Prompt as the body
   input.*      the input, any one extension
   gold.md      the Gold Answer
   rubric.yaml  the task-specific Criteria, added to the shared Rubric
@@ -32,7 +33,9 @@ GOLD_FILE = "gold.md"
 RUBRIC_FILE = "rubric.yaml"
 VERSIONS_FOLDER = "versions"
 
-TASK_FIELDS = ("id", "track", "trap", "version", "manual_time_minutes")
+TASK_FIELDS = (
+    "id", "name", "track", "trap", "output_shape", "version", "manual_time_minutes"
+)
 
 # T<track number>.<n>, optionally suffixed, such as T1.1-example for a synthetic twin.
 # The numbers are catalog naming only: a Task's Track is what its task.md declares.
@@ -42,8 +45,10 @@ _TASK_ID = re.compile(r"^T[1-9][0-9]*\.[1-9][0-9]*(-[a-z0-9]+)*$")
 @dataclass(frozen=True)
 class Task:
     id: str
+    name: str | None  # the catalog's task name; optional outside the catalog
     track: str
     trap: str
+    output_shape: str | None  # what the Output should look like; optional likewise
     version: int
     manual_time_minutes: int | float | None  # None until timed once
     canonical_prompt: str
@@ -152,10 +157,16 @@ def load_task(ctx: TaskContext, root: TaskRoot, folder: Path) -> Task:
         if missing
     )
     own = _own_criteria(ctx, f"{display}/{RUBRIC_FILE}")
+    optional = {
+        key: None if meta.get(key) is None else f.text(meta[key], key)
+        for key in ("name", "output_shape")
+    }
     return Task(
         id=task_id,
+        name=optional["name"],
         track=track,
         trap=f.text(meta.get("trap"), "trap"),
+        output_shape=optional["output_shape"],
         version=version,
         manual_time_minutes=manual_time,
         canonical_prompt=prompt,
@@ -189,6 +200,8 @@ def scaffold_task(
     canonical_prompt: str,
     criteria: Iterable[CriterionSpec],
     manual_time_minutes: int | float | None,
+    name: str | None = None,
+    output_shape: str | None = None,
 ) -> Task:
     """Write a new Task folder at version 1 with a placeholder input and Gold Answer.
 
@@ -205,7 +218,7 @@ def scaffold_task(
         _write_task_files(
             ctx,
             folder,
-            _task_meta(task_id, track, trap, 1, manual_time_minutes),
+            _task_meta(task_id, name, track, trap, output_shape, 1, manual_time_minutes),
             canonical_prompt,
             criteria,
         )
@@ -219,8 +232,10 @@ def scaffold_task(
 
 # What Workspace.update_task may change; version follows ADR-0003, the rest is fixed.
 EDITABLE_FIELDS = (
+    "name",
     "track",
     "trap",
+    "output_shape",
     "canonical_prompt",
     "criteria",
     "manual_time_minutes",
@@ -257,8 +272,10 @@ def edit_task(ctx: TaskContext, task: Task, changes: Mapping[str, Any], *, used:
     backup = {path: path.read_bytes() for path in files}
     meta = _task_meta(
         task.id,
+        edited["name"],
         edited["track"],
         edited["trap"],
+        edited["output_shape"],
         task.version + 1 if used else task.version,
         edited["manual_time_minutes"],
     )
@@ -298,8 +315,10 @@ def _archive(task: Task, archive: Path) -> None:
 
 def _editable_state(task: Task) -> dict[str, Any]:
     return {
+        "name": task.name,
         "track": task.track,
         "trap": task.trap,
+        "output_shape": task.output_shape,
         "canonical_prompt": task.canonical_prompt,
         "criteria": [criterion_dict(c) for c in task.own_criteria],
         "manual_time_minutes": task.manual_time_minutes,
@@ -309,16 +328,25 @@ def _editable_state(task: Task) -> dict[str, Any]:
 
 
 def _task_meta(
-    task_id: str, track: str, trap: str, version: int, manual_time: int | float | None
+    task_id: str,
+    name: str | None,
+    track: str,
+    trap: str,
+    output_shape: str | None,
+    version: int,
+    manual_time: int | float | None,
 ) -> dict[str, Any]:
-    """task.md's frontmatter, in TASK_FIELDS order."""
-    return {
+    """task.md's frontmatter, in TASK_FIELDS order; an absent name or output_shape is left out."""
+    meta = {
         "id": task_id,
+        "name": name,
         "track": track,
         "trap": trap,
+        "output_shape": output_shape,
         "version": version,
         "manual_time_minutes": manual_time,
     }
+    return {k: v for k, v in meta.items() if v is not None or k == "manual_time_minutes"}
 
 
 def _write_task_files(
