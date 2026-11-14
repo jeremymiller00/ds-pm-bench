@@ -712,6 +712,20 @@ class Workspace:
             full_checks=run.full_human_checks,
         ))
 
+    def spot_check_item(self, run: Run, task_id: str) -> BlindCalibrationItem:
+        """What a human Spot-checking a queued Task of a judged Run sees: its input, Gold
+        Answer, final Output and the Criteria still to check; never the Judge's scores,
+        the Run or the Candidate. id is the Task id."""
+        task = run.task(task_id)
+        left = run.spot_checks_left.get(task.id, ())
+        return BlindCalibrationItem(
+            id=task.id,
+            input=run.task_input(task.id),
+            criteria=tuple(c for c in task.rubric.criteria if c.id in left),
+            gold_answer=task.gold_answer_path.read_text().strip(),
+            output=run.final_output(task.id),
+        )
+
     @property
     def calibration_set(self) -> CalibrationSet:
         return CalibrationSet(self.root, self.settings.private_roots)

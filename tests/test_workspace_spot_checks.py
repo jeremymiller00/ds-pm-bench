@@ -152,3 +152,19 @@ def test_finished_spot_checks_more_than_a_point_from_the_judge_still_re_test(ws_
 
     assert verdict.outcome == "re-test"
     assert verdict.rationale[0].startswith("Spot-check:")
+
+
+def test_a_spot_check_shows_the_output_blind_with_the_criteria_left(ws_dir: Path):
+    ws = Workspace.open(ws_dir, judges=FakeJudges())
+    run = judged_run(ws)
+    task_id = run.spot_check_queue[0]
+    run.record_spot_check(task_id, "clarity", 4)
+
+    blind = ws.spot_check_item(run, task_id)
+
+    assert blind.id == task_id
+    assert blind.output == "final"
+    assert "Churn rose 4% last quarter" in blind.input
+    assert blind.gold_answer.startswith("Problem: predict SMB churn")
+    assert [c.id for c in blind.criteria] == list(run.spot_checks_left[task_id])
+    assert "clarity" not in [c.id for c in blind.criteria]
