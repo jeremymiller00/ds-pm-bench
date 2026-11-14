@@ -11,7 +11,7 @@ from textual.binding import Binding
 from textual.containers import Vertical, VerticalScroll
 from textual.css.query import NoMatches
 from textual.widget import Widget
-from textual.widgets import Button, Input, Label, Select, Static
+from textual.widgets import Button, DataTable, Input, Label, Select, Static
 
 from bench.core.errors import ConfigError
 from bench.core.settings import BANDED_MEASURES, DIMENSIONS, Settings
@@ -92,6 +92,8 @@ class SettingsPane(VerticalScroll):
     def compose(self) -> ComposeResult:
         with Vertical(id="settings-form", classes="settings-section"):
             yield from self._compose_settings()
+        with Vertical(id="prices-form", classes="settings-section"):
+            yield from self._compose_prices()
 
     def _compose_settings(self) -> ComposeResult:
         settings = self.workspace.settings
@@ -127,6 +129,62 @@ class SettingsPane(VerticalScroll):
         yield Static("", id="settings-status", markup=False)
         yield Button("Save settings", id="settings-save", variant="primary")
 
+    def _compose_prices(self) -> ComposeResult:
+        yield Static("Prices: USD per million tokens, keyed by the exact model string a "
+                     "Candidate uses. Select a row to fill the form.", markup=False)
+        table = DataTable(id="price-table", cursor_type="row")
+        table.add_columns("Model", "Input / Mtok", "Output / Mtok")
+        yield table
+        yield Label("Model")
+        yield Input(id="price-model")
+        yield Label("Input per Mtok (USD)")
+        yield Input(id="price-input")
+        yield Label("Output per Mtok (USD)")
+        yield Input(id="price-output")
+        yield Static("", id="err-prices", classes="form-error", markup=False)
+        yield Button("Set price", id="price-save", variant="primary")
+        yield Button("Remove price", id="price-remove", variant="error")
+
+    def on_mount(self) -> None:
+        self._list_prices()
+
+    def _list_prices(self) -> None:
+        table = self.query_one("#price-table", DataTable)
+        table.clear()
+        for model, price in self.workspace.prices.models.items():
+            table.add_row(model, fmt(price.input_per_mtok), fmt(price.output_per_mtok),
+                          key=model)
+
+    def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
+        if event.data_table.id != "price-table" or event.row_key.value is None:
+            return
+        price = self.workspace.prices.models[event.row_key.value]
+        self.query_one("#price-model", Input).value = event.row_key.value
+        self.query_one("#price-input", Input).value = fmt(price.input_per_mtok)
+        self.query_one("#price-output", Input).value = fmt(price.output_per_mtok)
+
+    def set_price(self) -> None:
+        self._clear_errors("prices-form")
+        try:
+            self.workspace.set_price(
+                self._value("price-model").strip(),
+                input_per_mtok=parse_number(self._value("price-input"), "input_per_mtok"),
+                output_per_mtok=parse_number(self._value("price-output"), "output_per_mtok"),
+            )
+        except (FormError, ConfigError) as error:
+            self._show_error(error, "prices-form", "err-prices")
+            return
+        self._list_prices()
+
+    def remove_price(self) -> None:
+        self._clear_errors("prices-form")
+        try:
+            self.workspace.remove_price(self._value("price-model").strip())
+        except ConfigError as error:
+            self._show_error(error, "prices-form", "err-prices")
+            return
+        self._list_prices()
+
     # Live weight sum: display only; the Workspace decides whether it is valid.
 
     def on_input_changed(self, event: Input.Changed) -> None:
@@ -137,26 +195,30 @@ class SettingsPane(VerticalScroll):
     # Saving
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id == "settings-save":
-            self.save_settings()
+        saves = {"settings-save": self.save_settings, "price-save": self.set_price,
+                 "price-remove": self.remove_price}
+        if event.button.id in saves:
+            saves[event.button.id]()
 
     def action_save(self) -> None:
         focused = self.app.focused
         section = next((w for w in (focused.ancestors if focused else ())
                         if isinstance(w, Widget) and w.has_class("settings-section")), None)
-        if section is not None and section.id == "settings-form":
-            self.save_settings()
+        saves = {"settings-form": self.save_settings, "prices-form": self.set_price}
+        if section is not None and section.id in saves:
+            saves[section.id]()
 
     def _clear_errors(self, section: str) -> None:
         for error in self.query_one(f"#{section}").query(".form-error"):
             error.update("")
 
-    def _show_error(self, error: FormError | ConfigError, fallback: str) -> None:
-        field = getattr(error, "field", "")
+    def _show_error(self, error: FormError | ConfigError, section: str, fallback: str) -> None:
+        """Show error next to the field it names, else in the section's fallback slot."""
+        form = self.query_one(f"#{section}")
         try:
-            slot = self.query_one(f"#{error_slot(field)}", Static)
+            slot = form.query_one(f"#{error_slot(getattr(error, 'field', ''))}", Static)
         except NoMatches:  # a field without its own slot
-            slot = self.query_one(f"#{fallback}", Static)
+            slot = form.query_one(f"#{fallback}", Static)
         slot.update(str(error))
 
     def save_settings(self) -> None:
@@ -167,7 +229,7 @@ class SettingsPane(VerticalScroll):
             self.workspace.update_settings(**changes)
         except (FormError, ConfigError) as error:
             status.update("Not saved: fix the field marked below.")
-            self._show_error(error, "settings-status")
+            self._show_error(error, "settings-form", "settings-status")
             return
         status.update("Saved config/settings.yaml." if changes else "Nothing changed.")
 

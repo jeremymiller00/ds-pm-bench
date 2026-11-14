@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-from textual.widgets import Input, Static, TabbedContent, TextArea
+from textual.widgets import DataTable, Input, Static, TabbedContent, TextArea
 
 from bench import Workspace
 from bench.tui.app import BenchApp
@@ -117,3 +117,43 @@ async def test_a_field_that_is_not_a_number_is_shown_next_to_it(workspace_dir: P
         error = text(app, "#err-spot_check_rate")
 
     assert "must be a number" in error
+
+
+def price_rows(app: BenchApp) -> list[list[str]]:
+    table = app.query_one("#price-table", DataTable)
+    return [[str(cell) for cell in table.get_row_at(i)] for i in range(table.row_count)]
+
+
+async def test_a_price_is_set_listed_and_removed(workspace_dir: Path):
+    app = BenchApp(Workspace.open(workspace_dir))
+    async with app.run_test() as pilot:
+        await open_settings(app, pilot)
+        fill(app, {"#price-model": "anthropic/claude-opus-5-5", "#price-input": "15",
+                   "#price-output": "75"})
+        await save(app, pilot, "#price-save")
+        listed = price_rows(app)
+        saved = Workspace.open(workspace_dir).prices.models
+        fill(app, {"#price-model": "anthropic/claude-opus-5-5"})
+        await save(app, pilot, "#price-remove")
+        after_removal = price_rows(app)
+
+    assert listed == [["anthropic/claude-opus-5-5", "15", "75"]]
+    assert saved["anthropic/claude-opus-5-5"].output_per_mtok == 75
+    assert after_removal == []
+    assert Workspace.open(workspace_dir).prices.models == {}
+
+
+async def test_a_refused_price_is_shown_next_to_the_price_form(workspace_dir: Path):
+    app = BenchApp(Workspace.open(workspace_dir))
+    async with app.run_test() as pilot:
+        await open_settings(app, pilot)
+        fill(app, {"#price-model": "openai/gpt-6"})
+        await save(app, pilot, "#price-remove")
+        removal_error = text(app, "#err-prices")
+        fill(app, {"#price-input": "-1", "#price-output": "2"})
+        await save(app, pilot, "#price-save")
+        price_error = text(app, "#err-prices")
+
+    assert "has no price to remove" in removal_error
+    assert "config/prices.yaml" in price_error
+    assert Workspace.open(workspace_dir).prices.models == {}
