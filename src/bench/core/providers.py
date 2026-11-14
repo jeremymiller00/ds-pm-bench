@@ -30,7 +30,7 @@ from bench.core.errors import (
     MissingSecret,
 )
 from bench.core.fields import FieldReader
-from bench.core.judging import JudgeRequest
+from bench.core.judging import JudgeModel, JudgeModelSpec, JudgeRequest
 from bench.core.rubric import Criterion
 
 ANTHROPIC = "anthropic"
@@ -229,6 +229,20 @@ def candidate_adapter(candidate: Candidate, root: Path) -> CandidateAdapter:
         return AnthropicAdapter(anthropic.Anthropic(api_key=key, max_retries=0), model,
                                 **options)
     return OpenAIAdapter(openai.OpenAI(api_key=key, max_retries=0), model, **options)
+
+
+def judge_model(spec: JudgeModelSpec, root: Path) -> JudgeModel:
+    """The SDK JudgeModel for a judge model of the Judge Setup, its API key read from
+    spec.env_var per ADR-0005."""
+    if spec.provider not in PROVIDERS:
+        raise JudgeUnavailable(
+            f"Judge {spec.label}: no judge model for provider {spec.provider!r}; "
+            f"use one of {', '.join(PROVIDERS)}"
+        )
+    key = read_secret(spec.env_var, root)
+    if spec.provider == ANTHROPIC:
+        return AnthropicJudge(anthropic.Anthropic(api_key=key, max_retries=0), spec.model)
+    return OpenAIJudge(openai.OpenAI(api_key=key, max_retries=0), spec.model)
 
 
 def _reader(candidate: Candidate) -> FieldReader:

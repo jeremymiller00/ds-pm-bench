@@ -5,7 +5,8 @@ config/judge.yaml names the Judge Setup:
   clearance  public_only or public_and_private (ADR-0006)
   prompt     the judge prompt file, relative to the Workspace root
   models     each {provider, model}, and optionally family: the Candidate tools that
-             count as this model's family for the self-preference bias flag
+             count as this model's family for the self-preference bias flag, and
+             env_var: the variable holding its API key (default <PROVIDER>_API_KEY)
 
 Its identity is a content hash of its models and the prompt the Judge sees, so editing
 either makes a new Judge Setup. The Judge sees the input, the Rubric, the Gold Answer and
@@ -30,7 +31,7 @@ from bench.core.rubric import Criterion, check_criterion_score
 
 JUDGE_FILE = "config/judge.yaml"
 JUDGE_FIELDS = ("mode", "clearance", "prompt", "models")
-MODEL_FIELDS = ("provider", "model", "family")
+MODEL_FIELDS = ("provider", "model", "family", "env_var")
 MODES = ("single", "panel")
 
 # Judges on a panel more than this many points apart on a Criterion disagree (ADR-0002).
@@ -56,6 +57,7 @@ class JudgeModelSpec:
     provider: str
     model: str
     family: tuple[str, ...]  # Candidate tools of the same family, lower case
+    env_var: str = ""  # the API key's variable (ADR-0005); not part of the identity
 
     @property
     def label(self) -> str:
@@ -214,7 +216,11 @@ def _model(f: FieldReader, entry: Any, at: str) -> JudgeModelSpec:
         names = tuple(f.text(t, f"{at}.family[{i}]").lower() for i, t in enumerate(family))
     else:
         names = DEFAULT_FAMILIES.get(provider, (provider,))
-    return JudgeModelSpec(provider=provider, model=model, family=names)
+    if "env_var" in raw:
+        env_var = f.text(raw["env_var"], f"{at}.env_var")
+    else:
+        env_var = f"{provider.upper()}_API_KEY"
+    return JudgeModelSpec(provider=provider, model=model, family=names, env_var=env_var)
 
 
 def parse_reply(

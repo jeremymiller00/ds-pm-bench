@@ -396,12 +396,8 @@ def test_a_reply_in_a_code_fence_is_accepted(ws_dir: Path):
     assert run.unjudged == ()
 
 
-def test_judging_without_a_judge_setup_or_models_is_unavailable(ws_dir: Path):
-    ws = Workspace.open(ws_dir)
-    run = recorded_run(ws)
-    with pytest.raises(JudgeUnavailable, match="judge models"):
-        ws.judge_run(run, allow_uncertified=True)
-
+def test_judging_without_a_judge_setup_is_unavailable(ws_dir: Path):
+    run = recorded_run(Workspace.open(ws_dir, judges=FakeJudges()))
     (ws_dir / "config" / "judge.yaml").unlink()
     with pytest.raises(JudgeUnavailable, match="config/judge.yaml"):
         Workspace.open(ws_dir, judges=FakeJudges()).judge_run(run, allow_uncertified=True)
