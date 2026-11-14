@@ -12,6 +12,7 @@ from bench.core.workspace import Workspace
 from bench.tui.candidates import CandidateBrowser
 from bench.tui.comparisons import ComparisonsPane, DecisionLogPane
 from bench.tui.runs import RunsPane
+from bench.tui.settings import SettingsPane
 from bench.tui.tasks import TaskBrowser
 
 # (pane id, tab label) for the sections still to come, in navigation order.
@@ -25,6 +26,7 @@ PLACEHOLDER_SECTIONS = (
 BUILT_SECTIONS = {
     "comparisons": ComparisonsPane,
     "decision-log": DecisionLogPane,
+    "settings": SettingsPane,
 }
 
 
