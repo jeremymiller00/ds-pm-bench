@@ -1,7 +1,8 @@
 """Adapter ports: the outward boundaries Workspace receives by injection (spec #1).
 
 Tests inject fakes; the real implementations below read the system clock and run the
-person's $EDITOR.
+person's $EDITOR. The real Candidate Adapters, which call a provider's API, are in
+bench.core.providers.
 """
 
 from __future__ import annotations
@@ -12,6 +13,7 @@ import shlex
 import subprocess
 import tempfile
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
@@ -33,6 +35,26 @@ class Editor(Protocol):
     EditorError if it cannot."""
 
     def edit(self, text: str) -> str: ...
+
+
+@dataclass(frozen=True)
+class CandidateReply:
+    """What an automated Candidate returned for one prompt: its raw Output and the
+    tokens the provider counted."""
+
+    text: str
+    input_tokens: int
+    output_tokens: int
+
+
+class CandidateAdapter(Protocol):
+    """Sends text to an automated Candidate, word for word, and returns its reply.
+
+    Raises CandidateToolError when the tool errors (API error, timeout, refusal to
+    answer); the caller decides whether to retry, so an Adapter never retries itself.
+    """
+
+    def send(self, text: str) -> CandidateReply: ...
 
 
 class SystemClock:

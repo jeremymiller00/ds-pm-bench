@@ -52,8 +52,9 @@ class SuiteUnavailable(Exception):
 
 
 class AttemptError(Exception):
-    """An Attempt refused an action: a Run whose Candidate is not manual-assisted, a Task
-    already recorded, a step out of order, or an Attempt already over."""
+    """An Attempt refused an action: a Run whose Candidate is the wrong kind of Adapter
+    for it, a Task already recorded or already awaiting its edit, a step out of order,
+    or an Attempt already over."""
 
 
 class EditorError(Exception):
@@ -101,3 +102,12 @@ class JudgeReplyError(ValueError):
 
 class JudgeSetupMismatch(Exception):
     """A Run already judged by one Judge Setup cannot be judged by another."""
+
+
+class CandidateToolError(Exception):
+    """An automated Candidate's tool errored: an API error, a timeout or no Output."""
+
+
+class MissingSecret(Exception):
+    """A secret a Candidate needs is set neither in the environment nor in .env.
+    Names the environment variable, never a value (ADR-0005)."""

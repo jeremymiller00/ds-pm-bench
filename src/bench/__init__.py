@@ -1,10 +1,19 @@
 """DS PM Benchmark core library."""
 
-from bench.core.adapters import Clock, Editor, ExternalEditor, SystemClock
+from bench.core.adapters import (
+    CandidateAdapter,
+    CandidateReply,
+    Clock,
+    Editor,
+    ExternalEditor,
+    SystemClock,
+)
 from bench.core.attempts import Attempt
+from bench.core.automated import PendingOutput
 from bench.core.errors import (
     AttemptError,
     CandidateAuthoringError,
+    CandidateToolError,
     ClearanceError,
     ConfigError,
     EditorError,
@@ -14,6 +23,7 @@ from bench.core.errors import (
     JudgeReplyError,
     JudgeSetupMismatch,
     JudgeUnavailable,
+    MissingSecret,
     RunExists,
     RunIncomplete,
     RunMismatch,
@@ -42,7 +52,10 @@ from bench.core.workspace import Workspace
 __all__ = [
     "Attempt",
     "AttemptError",
+    "CandidateAdapter",
     "CandidateAuthoringError",
+    "CandidateReply",
+    "CandidateToolError",
     "Clock",
     "Comparison",
     "ClearanceError",
@@ -61,6 +74,8 @@ __all__ = [
     "JudgeSetup",
     "JudgeSetupMismatch",
     "JudgeUnavailable",
+    "MissingSecret",
+    "PendingOutput",
     "RunExists",
     "RunIncomplete",
     "RunMismatch",

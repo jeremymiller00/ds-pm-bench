@@ -7,6 +7,8 @@ authors = [
 ]
 requires-python = ">=3.12,<3.13"
 dependencies = [
+    "anthropic>=2.8.0",
+    "openai>=3.51.0",
     "pyyaml>=6.0.3",
     "textual>=8.2.8",
 ]
@@ -26,6 +28,9 @@ dev = [
 testpaths = ["tests"]
 addopts = "-ra"
 asyncio_mode = "auto"
+markers = [
+    "live: opt-in smoke test calling a real provider API (needs BENCH_LIVE=1 and a key)",
+]
 
 [project.scripts]
 bench = "bench.cli:main"
