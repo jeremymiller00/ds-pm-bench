@@ -11,9 +11,9 @@ from pathlib import Path
 import pytest
 from textual.widgets import Button, OptionList, Select, Static, TextArea
 
-from bench import CandidateToolError, Workspace
+from bench import CandidateToolError, MissingSecret, Workspace
 from bench.tui.app import BenchApp
-from bench.tui.runs import JudgeScreen, ManualTaskScreen
+from bench.tui.runs import AttemptScreen, JudgeScreen
 from test_tui import write_task
 from test_workspace_attempts import FakeClock
 from test_workspace_automated import FakeAdapter, reply
@@ -74,7 +74,7 @@ async def send(app: BenchApp, pilot) -> None:
     await pilot.pause()
 
 
-async def edit_task(app: BenchApp, pilot, task_id: str = EXAMPLE) -> ManualTaskScreen:
+async def edit_task(app: BenchApp, pilot, task_id: str = EXAMPLE) -> AttemptScreen:
     tasks = app.query_one("#run-tasks", OptionList)
     tasks.focus()
     tasks.highlighted = next(
@@ -82,7 +82,7 @@ async def edit_task(app: BenchApp, pilot, task_id: str = EXAMPLE) -> ManualTaskS
     )
     await pilot.press("enter")
     await pilot.pause()
-    assert isinstance(app.screen, ManualTaskScreen)
+    assert isinstance(app.screen, AttemptScreen)
     return app.screen
 
 
@@ -132,7 +132,7 @@ async def test_a_task_that_errors_twice_is_shown_and_sent_again_on_retry(
                            "T2.1: raw Output ready to edit"]
 
 
-async def test_the_edit_pass_opens_the_task_screen_with_the_raw_output_in(
+async def test_the_automated_attempt_opens_the_task_screen_with_the_raw_output_in(
     ws_dir: Path, clock: FakeClock
 ):
     adapter = FakeAdapter(clock, reply(RAW), seconds=4.5)
@@ -151,7 +151,7 @@ async def test_the_edit_pass_opens_the_task_screen_with_the_raw_output_in(
         draft.text = "Predict SMB churn 60 days ahead."
         await pilot.press("ctrl+s")
         await pilot.pause()
-        assert not isinstance(app.screen, ManualTaskScreen)
+        assert not isinstance(app.screen, AttemptScreen)
         status = text(app, "#run-status")
         progress = text(app, "#run-progress")
         left = options(app, "#run-tasks")
@@ -162,7 +162,7 @@ async def test_the_edit_pass_opens_the_task_screen_with_the_raw_output_in(
     assert left == []
 
 
-async def test_an_abandoned_edit_pass_keeps_the_raw_output_for_another(
+async def test_an_abandoned_automated_attempt_keeps_the_raw_output_for_another(
     ws_dir: Path, clock: FakeClock
 ):
     app = open_app(ws_dir, clock, FakeAdapter(clock, reply(RAW)))
@@ -191,7 +191,7 @@ async def test_a_task_not_yet_sent_cannot_be_edited(ws_dir: Path, clock: FakeClo
         on_screen = app.screen
         status = text(app, "#run-status")
 
-    assert not isinstance(on_screen, ManualTaskScreen)
+    assert not isinstance(on_screen, AttemptScreen)
     assert "send it first" in status
 
 
@@ -274,7 +274,7 @@ async def test_a_panel_shows_each_judges_reason_and_flags_a_disagreement(
     judges = FakeJudges(**{
         "openai/gpt-6": FakeJudge(scores={"clarity": 5}),
         "google/gemini-4": FakeJudge(scores={"clarity": 2}),
-        "mistral/large-3": FakeJudge(scores={"clarity": 3}),
+        "openai/gpt-6-mini": FakeJudge(scores={"clarity": 3}),
     })
     app = open_app(ws_dir, clock, FakeAdapter(clock, reply(RAW)), judges)
     async with app.run_test() as pilot:
@@ -284,9 +284,9 @@ async def test_a_panel_shows_each_judges_reason_and_flags_a_disagreement(
         shown = text(app, "#judge-results")
 
     assert "clarity 3" in shown  # the median
-    assert "Judges disagree on clarity" in shown
+    assert "Judge models disagree on clarity" in shown
     assert "full human check" in shown
-    for label in ("openai/gpt-6", "google/gemini-4", "mistral/large-3"):
+    for label in ("openai/gpt-6", "google/gemini-4", "openai/gpt-6-mini"):
         assert f"{label}: Clarity ok." in shown
     assert "same family" not in shown
 
@@ -315,7 +315,7 @@ async def test_a_refused_judge_setup_is_shown_and_nothing_is_logged(
         await override(app, pilot)
         shown = text(app, "#judge-results")
 
-    assert "anthropic/claude-opus-5-5" in shown and "grades itself" in shown
+    assert "anthropic/claude-opus-5-5" in shown and "judges its own Output" in shown
     assert Workspace.open(ws_dir).decision_log() == ()
 
 
@@ -330,3 +330,40 @@ async def test_without_a_judge_setup_the_screen_says_so(ws_dir: Path, clock: Fak
 
     assert "config/judge.yaml" in setup
     assert disabled
+
+
+async def test_the_judge_button_waits_for_a_finished_run(ws_dir: Path, clock: FakeClock):
+    app = open_app(ws_dir, clock, FakeAdapter(clock, reply(RAW)), FakeJudges())
+    async with app.run_test() as pilot:
+        await start_run(app, pilot)
+        before = app.query_one("#run-judge", Button).disabled
+        await send(app, pilot)
+        returned = app.query_one("#run-judge", Button).disabled  # sent, not yet recorded
+        screen = await edit_task(app, pilot)
+        screen.query_one("#task-draft", TextArea).text = "Predict SMB churn 60 days ahead."
+        await pilot.press("ctrl+s")
+        await pilot.pause()
+        after = app.query_one("#run-judge", Button).disabled
+
+    assert before and returned
+    assert not after
+
+
+async def test_a_missing_judge_key_is_shown_on_the_judge_screen(
+    ws_dir: Path, clock: FakeClock
+):
+    def judges(spec):
+        raise MissingSecret("OPENAI_API_KEY is not set; export it or add it to .env")
+
+    app = open_app(ws_dir, clock, FakeAdapter(clock, reply(RAW)), judges)
+    async with app.run_test() as pilot:
+        await edited_run(app, pilot, clock)
+        await open_judge(app, pilot)
+        await override(app, pilot)
+        shown = text(app, "#judge-results")
+        still_open = isinstance(app.screen, JudgeScreen)
+        retry = not app.screen.query_one("#judge-override", Button).disabled
+
+    assert "Not judged" in shown and "OPENAI_API_KEY" in shown
+    assert still_open and retry
+    assert Workspace.open(ws_dir).decision_log() == ()

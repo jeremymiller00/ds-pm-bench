@@ -13,7 +13,7 @@ from textual.widgets import OptionList, Select, Static, TextArea
 
 from bench import Workspace
 from bench.tui.app import BenchApp
-from bench.tui.runs import ManualTaskScreen, ManualTimeScreen
+from bench.tui.runs import AttemptScreen, ManualTimeScreen
 from test_tui import configure_private_root, write_task
 from test_workspace_attempts import FakeClock, FakeEditor
 from test_workspace_candidates import candidate, write_candidate
@@ -55,7 +55,7 @@ async def start_run(app: BenchApp, pilot, candidate_id: str = CANDIDATE) -> None
     await pilot.pause()
 
 
-async def open_task(app: BenchApp, pilot, task_id: str = EXAMPLE) -> ManualTaskScreen:
+async def open_task(app: BenchApp, pilot, task_id: str = EXAMPLE) -> AttemptScreen:
     tasks = app.query_one("#run-tasks", OptionList)
     tasks.focus()
     tasks.highlighted = next(
@@ -63,7 +63,7 @@ async def open_task(app: BenchApp, pilot, task_id: str = EXAMPLE) -> ManualTaskS
     )
     await pilot.press("enter")
     await pilot.pause()
-    assert isinstance(app.screen, ManualTaskScreen)
+    assert isinstance(app.screen, AttemptScreen)
     return app.screen
 
 
@@ -105,7 +105,7 @@ async def test_a_full_run_of_the_example_task_completes_with_no_api(
         draft.text = "Predict SMB churn 60 days ahead."
         await pilot.press("ctrl+s")
         await pilot.pause()
-        assert not isinstance(app.screen, ManualTaskScreen)
+        assert not isinstance(app.screen, AttemptScreen)
         status = text(app, "#run-status")
         progress = text(app, "#run-progress")
 

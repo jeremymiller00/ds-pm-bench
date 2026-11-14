@@ -2,8 +2,8 @@
 automated Candidate and edit what comes back, then judge the Run.
 
 Everything goes through the Workspace and its Attempt; this module only shows
-what they report and passes on what the person types. Calls to a Candidate or a Judge
-run in Textual workers, off the UI, so a slow model never freezes the screen.
+what they report and passes on what the person types. Calls to a Candidate or a judge
+model run in Textual workers, off the UI, so a slow model never freezes the screen.
 """
 
 from __future__ import annotations
@@ -19,19 +19,16 @@ from textual.widgets import Button, Footer, Label, OptionList, Select, Static, T
 from textual.widgets.option_list import Option
 
 from bench.core.attempts import Attempt
-from bench.core.automated import PendingOutput
+from bench.core.automated import ReturnedOutput
 from bench.core.errors import (
     AttemptError,
     CandidateToolError,
+    CandidateUnavailable,
     ClearanceError,
     ConfigError,
     EditorError,
     GateNotPassed,
-    JudgeNotCertified,
-    JudgeRefused,
-    JudgeReplyError,
-    JudgeSetupMismatch,
-    JudgeUnavailable,
+    JudgingError,
     MissingSecret,
     RunExists,
     RunMismatch,
@@ -56,16 +53,9 @@ RUN_ERRORS = (
     UnknownRunError,
 )
 # What can stop one automated Task from being sent; shown against that Task.
-SEND_ERRORS = (AttemptError, CandidateToolError, ClearanceError, GateNotPassed, MissingSecret)
-# What the Workspace refuses when judging a Run, shown on the Judge screen.
-JUDGE_ERRORS = (
-    ClearanceError,
-    JudgeNotCertified,
-    JudgeRefused,
-    JudgeReplyError,
-    JudgeSetupMismatch,
-    JudgeUnavailable,
-)
+SEND_ERRORS = (AttemptError, CandidateToolError, CandidateUnavailable, ClearanceError,
+               GateNotPassed, MissingSecret)
+# Every judging refusal or failure (a JudgingError) is shown on the Judge screen.
 
 
 class RunsPane(Vertical):
@@ -102,7 +92,7 @@ class RunsPane(Vertical):
             yield Button("Resume Run", id="run-resume")
         yield Static("No Run open.", id="run-progress", markup=False)
         with Horizontal(id="run-actions"):
-            yield Button("Send pending Tasks", id="run-send", disabled=True)
+            yield Button("Send Tasks", id="run-send", disabled=True)
             yield Button("Judge Run", id="run-judge", disabled=True)
         yield Label("Pending Tasks (enter to work or edit one)")
         yield OptionList(id="run-tasks")
@@ -189,7 +179,6 @@ class RunsPane(Vertical):
         self.run = run
         self.send_errors = {}
         self.query_one("#run-send", Button).disabled = run.candidate.manual_assisted
-        self.query_one("#run-judge", Button).disabled = False
         self._show_progress()
 
     def _show_progress(self) -> None:
@@ -197,6 +186,8 @@ class RunsPane(Vertical):
         if run is None:
             return
         self.query_one("#run-progress", Static).update(run_progress(run))
+        # Judging needs a finished Run: every Task's Output recorded.
+        self.query_one("#run-judge", Button).disabled = bool(run.pending)
         tasks = self.query_one("#run-tasks", OptionList)
         tasks.clear_options()
         if run.candidate.manual_assisted:
@@ -220,7 +211,7 @@ class RunsPane(Vertical):
         self.app.push_screen(JudgeScreen(self.workspace, run), closed)
 
     def _automated_label(self, run: Run, task_id: str) -> str:
-        if self.workspace.pending_output(run, task_id) is not None:
+        if self.workspace.returned_output(run, task_id) is not None:
             return f"{task_id}: raw Output ready to edit"
         if task_id in self.send_errors:
             return f"{task_id}: failed, send again to retry"
@@ -229,19 +220,19 @@ class RunsPane(Vertical):
     @on(Button.Pressed, "#run-send")
     def _send(self) -> None:
         if self.run is not None:
-            self.run_worker(self._send_pending(self.run), group="send", exclusive=True)
+            self.run_worker(self._send_tasks(self.run), group="send", exclusive=True)
 
-    async def _send_pending(self, run: Run) -> None:
-        """Send each pending Task with no raw Output yet, one after another, off the UI
+    async def _send_tasks(self, run: Run) -> None:
+        """Send each Task the Workspace says is sendable, one after another, off the UI
         thread; a Task that fails is noted against it and the rest still go."""
         button = self.query_one("#run-send", Button)
         button.disabled = True
-        to_send = [t for t in run.pending if self.workspace.pending_output(run, t) is None]
+        to_send = self.workspace.sendable_tasks(run)
         lines = []
         for n, task_id in enumerate(to_send, 1):
             self._status(f"Sending {task_id} ({n} of {len(to_send)})...")
             try:
-                pending = await asyncio.to_thread(
+                returned = await asyncio.to_thread(
                     self.workspace.run_automated_task, run, task_id
                 )
             except SEND_ERRORS as exc:
@@ -249,10 +240,10 @@ class RunsPane(Vertical):
                 lines.append(f"{task_id} failed: {exc}")
             else:
                 self.send_errors.pop(task_id, None)
-                lines.append(pending_summary(pending))
+                lines.append(returned_summary(returned))
             self._show_progress()
         button.disabled = False
-        self._status("\n".join(lines) or "Nothing to send: every pending Task has a raw Output.")
+        self._status("\n".join(lines) or "Nothing to send: every pending Task is ready to edit.")
 
     @on(OptionList.OptionSelected, "#run-tasks")
     def _work_task(self, event: OptionList.OptionSelected) -> None:
@@ -260,9 +251,8 @@ class RunsPane(Vertical):
         if run is None or event.option.id is None:
             return
         manual = run.candidate.manual_assisted
-        begin = self.workspace.begin_manual_task if manual else self.workspace.begin_edit_pass
         try:
-            attempt = begin(run, event.option.id)
+            attempt = self.workspace.begin_attempt(run, event.option.id)
         except RUN_ERRORS as exc:
             self._status(str(exc))
             return
@@ -275,28 +265,29 @@ class RunsPane(Vertical):
                 self._status(f"{attempt.task_id} abandoned; nothing recorded.")
             else:
                 self._status(
-                    f"{attempt.task_id} edit abandoned; nothing recorded, the raw Output "
-                    "kept for another edit pass."
+                    f"{attempt.task_id} Attempt abandoned; nothing recorded, the raw "
+                    "Output kept, ready to edit in another Attempt."
                 )
 
-        self.app.push_screen(ManualTaskScreen(attempt), saved)
+        self.app.push_screen(AttemptScreen(attempt), saved)
 
     def _status(self, message: str) -> None:
         self.query_one("#run-status", Static).update(message)
 
 
-class ManualTaskScreen(Screen[OutputRecord | None]):
-    """One Task's Attempt: copy the prompt, paste the raw Output, edit, save. An
-    automated Task's edit pass opens with the raw Output already in, ready to edit.
+class AttemptScreen(Screen[OutputRecord | None]):
+    """One Task's Attempt, of either kind. A manual-assisted one: copy the prompt, paste
+    the raw Output, edit, save. An automated one opens with the Returned Output already
+    in, ready to edit.
 
     Dismisses with the saved OutputRecord, or None when abandoned.
     """
 
     DEFAULT_CSS = """
-    ManualTaskScreen TextArea { height: 1fr; }
-    ManualTaskScreen #task-timer { height: auto; text-style: bold; }
-    ManualTaskScreen #task-help, ManualTaskScreen #task-error { height: auto; }
-    ManualTaskScreen #task-error { color: $error; }
+    AttemptScreen TextArea { height: 1fr; }
+    AttemptScreen #task-timer { height: auto; text-style: bold; }
+    AttemptScreen #task-help, AttemptScreen #task-error { height: auto; }
+    AttemptScreen #task-error { color: $error; }
     """
     BINDINGS = [
         Binding("ctrl+s", "save", "Submit / Save", priority=True),
@@ -426,7 +417,8 @@ EDITOR_NOTE = (
 class JudgeScreen(Screen[tuple[TaskJudging, ...] | None]):
     """Judge a Run: shows the Judge Setup and its hash and, until Certification arrives,
     asks for an explicit override that the Workspace logs. Then shows each Task's
-    Criterion scores with every Judge's reason, panel disagreements and bias warnings.
+    Criterion scores with every judge model's reason, Panel disagreements and bias
+    warnings.
 
     Dismisses with what was judged, or None when left without judging.
     """
@@ -466,7 +458,7 @@ class JudgeScreen(Screen[tuple[TaskJudging, ...] | None]):
             judged = await asyncio.to_thread(
                 self.workspace.judge_run, self.run, allow_uncertified=True
             )
-        except JUDGE_ERRORS as exc:
+        except JudgingError as exc:
             self._results(f"Not judged: {exc}")
             self.query_one("#judge-override", Button).disabled = False
             return
@@ -506,13 +498,14 @@ def judging_summary(judged: tuple[TaskJudging, ...]) -> str:
         lines += ["", f"Task {judging.task_id}"]
         if judging.same_family:
             lines.append(
-                "  Warning: a Judge is the same family as the Candidate, a bias risk; "
+                "  Warning: a judge model is the same family as the Candidate, a bias "
+                "risk; "
                 "full human check of every Criterion."
             )
         if judging.disagreements:
             lines.append(
-                f"  Judges disagree on {', '.join(judging.disagreements)} by more than a "
-                "point; full human check."
+                f"  Judge models disagree on {', '.join(judging.disagreements)} by more "
+                "than a point; full human check."
             )
         for criterion, score in judging.scores.items():
             flag = "  (disagreement)" if criterion in judging.disagreements else ""
@@ -594,14 +587,14 @@ def run_progress(run: Run) -> str:
     return "\n".join(lines)
 
 
-def pending_summary(pending: PendingOutput) -> str:
-    cost = f"cost ${pending.cost_usd:.2f}" if pending.cost_usd is not None else (
-        f"cost unknown ({pending.cost_note})"
+def returned_summary(returned: ReturnedOutput) -> str:
+    cost = f"cost ${returned.cost_usd:.2f}" if returned.cost_usd is not None else (
+        f"cost unknown ({returned.cost_note})"
     )
-    retried = ", after one retry" if pending.tries > 1 else ""
+    retried = ", after one retry" if returned.tries > 1 else ""
     return (
-        f"{pending.task_id}: raw Output ready to edit, latency "
-        f"{clock_time(pending.latency_seconds)}, {cost}{retried}."
+        f"{returned.task_id}: raw Output ready to edit, latency "
+        f"{clock_time(returned.latency_seconds)}, {cost}{retried}."
     )
 
 
