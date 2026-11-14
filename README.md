@@ -183,12 +183,33 @@ models:
 Each judge model is asked for JSON in its provider's structured-output mode (a JSON Schema
 naming every Criterion). The key's `env_var` is not part of the hash.
 Its hash covers the models and the prompt, so editing either is a new Judge Setup.
-`Workspace.judge_run(run, allow_uncertified=True)` scores every unscored Output of a
-finished Run blind; until certification lands every Judge Setup is uncertified, so the
-override is required, and it is logged to the Decision Log once a Task is judged (once
-per Run and Judge Setup). A judge model that is the model the Candidate calls (same
+`Workspace.judge_run(run)` scores every unscored Output of a finished Run blind with a
+certified Judge Setup; an uncertified one needs `allow_uncertified=True`, and that
+override is logged to the Decision Log once a Task is judged (once per Run and Judge
+Setup). A judge model that is the model the Candidate calls (same
 provider and model id) is refused, and a same-family judge model marks Tasks for a full
 human check. Every refusal is a `JudgingError`.
+
+### Calibration and Certification
+
+The Calibration Set (`calibration/`) holds final Outputs of finished Runs, Spot-checked
+or not: `Workspace.add_calibration_item(run_id, task_id)`. The public
+`calibration/<item>.yaml` keeps numbers only (Run, Task, version, Criterion ids, human
+scores, each Judge Setup's median scores by hash); the input, Gold Answer, Rubric text,
+Output and Judge reasons go to `calibration/content/` and `calibration/judge/` in the
+public repo, or in the private root for a Private Task. Item ids (`c0001`) are opaque.
+
+`unscored_calibration_items()` gives what a human scores blind (content only, no Judge
+scores, Run or Candidate) and `score_calibration_item(item_id, scores)` records a whole
+1-5 score per Criterion. `judge_calibration_set()` has the current Judge Setup score every
+item it has not, and `calibration_agreement()` reports per Criterion (and pooled) the
+share within 1 point and the quadratic weighted kappa. `certify_judge()` needs every item
+scored by both and every Criterion at or above `calibration.within_one_point` and
+`calibration.weighted_kappa` in settings (a Criterion whose kappa is undefined because
+both always gave the same score is held to the first only); it logs a
+`judge_certification` entry to the Decision Log, or raises `CertificationFailed` naming
+each shortfall. `judge_certified` reads that log for the current hash, so an edited
+judge model or prompt is uncertified until certified again.
 
 ### Golden fixtures
 
