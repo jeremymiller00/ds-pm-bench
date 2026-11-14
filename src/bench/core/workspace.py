@@ -653,7 +653,7 @@ class Workspace:
                 f"Run {run.id} is not finished: {', '.join(run.pending)} still pending; "
                 "judge it once every Task's Output is recorded"
             )
-        is_certified = certified(self.root, setup.hash)
+        is_certified = certified(self.root, setup)
         if not is_certified and not allow_uncertified:
             raise JudgeNotCertified(
                 f"Judge Setup {setup.hash} is not certified; recalibrate it on the "
@@ -782,24 +782,29 @@ class Workspace:
         setup = self._require_judge_setup()
         thresholds = self.settings.calibration
         return self.calibration_set.agreement(
-            setup.hash, thresholds.within_one_point, thresholds.weighted_kappa
+            setup.hash, thresholds.within_one_point, thresholds.weighted_kappa,
+            thresholds.min_items,
         )
 
     @property
     def judge_certified(self) -> bool:
-        """Whether the current Judge Setup is certified: a Certification of its hash is in
-        the Decision Log. Editing its models or prompt makes a new hash, uncertified
-        until it is calibrated and certified itself (story 44). False with no Judge Setup."""
-        return self.judge_setup is not None and certified(self.root, self.judge_setup.hash)
+        """Whether the current Judge Setup is certified: a Certification of its hash at
+        its Clearance is in the Decision Log (ADR-0002). Editing its mode, models or
+        prompt makes a new hash, uncertified until it is calibrated and certified itself
+        (story 44), and widening its Clearance to Private Tasks drops it. False with no
+        Judge Setup."""
+        return self.judge_setup is not None and certified(self.root, self.judge_setup)
 
     def certify_judge(self, *, on: datetime.date | None = None) -> Agreement:
         """Certify the current Judge Setup on the Calibration Set and log it to the
         Decision Log; returns the agreement it was certified on.
 
-        Every item must have a human score and this Judge Setup's score, and every
-        Criterion must meet the configured thresholds (settings calibration:
-        within_one_point, weighted_kappa); otherwise CertificationFailed names each
-        shortfall and nothing is logged. Certifying a certified Judge Setup logs nothing new.
+        Every item must have a human score and this Judge Setup's score, there must be at
+        least calibration.min_items of them (default 12), and every Criterion must meet
+        the configured thresholds (calibration.within_one_point, weighted_kappa);
+        otherwise CertificationFailed names each shortfall and nothing is logged. The
+        Certification records the Judge Setup's Clearance (ADR-0002). Certifying a
+        certified Judge Setup logs nothing new.
         """
         setup = self._require_judge_setup()
         agreement = self.calibration_agreement()
@@ -891,9 +896,10 @@ class Workspace:
         Workspace root; prompt the new text of the prompt file. Validated as on load:
         an invalid change raises ConfigError naming the field and writes nothing.
 
-        Changing the models or the prompt text makes a new Judge Setup with a new hash,
-        which has no Certification (ADR-0003); mode, clearance and env_var are not part
-        of the hash. Runs keep the hash of the Judge Setup that judged them.
+        Changing the mode, the models or the prompt text makes a new Judge Setup with a
+        new hash, which has no Certification (ADR-0003); clearance and env_var are not
+        part of the hash, but widening clearance to public_and_private drops the
+        Certification (ADR-0002). Runs keep the hash of the Judge Setup that judged them.
         """
         given = {"mode": mode, "clearance": clearance, "prompt": prompt_file,
                  "models": None if models is None else [dict(m) for m in models]}

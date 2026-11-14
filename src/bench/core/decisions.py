@@ -19,7 +19,7 @@ import yaml
 
 from bench.core.calibration import Agreement, CriterionAgreement
 from bench.core.judging import JudgeSetup
-from bench.core.kinds import EntryKind
+from bench.core.kinds import Clearance, EntryKind
 from bench.core.lookup import next_number
 from bench.core.verdicts import Scorecard, Verdict
 
@@ -93,23 +93,31 @@ def log_certification(
         "date": date.isoformat(),
         "judge_setup_hash": setup.hash,
         "judge_setup": setup.snapshot(),
+        "clearance": str(setup.clearance),
         "items": list(item_ids),
         "within_one_point": agreement.overall.within_one_point,
         "weighted_kappa": agreement.overall.weighted_kappa,
         "thresholds": {
             "within_one_point": agreement.within_one_point_threshold,
             "weighted_kappa": agreement.weighted_kappa_threshold,
+            "min_items": agreement.min_items,
         },
         "criteria": {cid: _agreement(a) for cid, a in agreement.criteria.items()},
     })
 
 
-def certified(root: Path, judge_setup_hash: str) -> bool:
-    """Whether a Certification of this Judge Setup is logged; a changed Judge Setup has a
-    new hash, so it is uncertified until certified itself."""
+def certified(root: Path, setup: JudgeSetup) -> bool:
+    """Whether a Certification of this Judge Setup at its Clearance is logged (ADR-0002).
+
+    A changed Judge Setup has a new hash, so it is uncertified until certified itself;
+    widening its Clearance to Private Tasks drops it too, since agreement measured at
+    one Clearance says nothing about content it never saw. An entry logged before
+    Certifications recorded a Clearance counts as public_only.
+    """
     return any(
         entry_kind(e) == EntryKind.JUDGE_CERTIFICATION
-        and e.get("judge_setup_hash") == judge_setup_hash
+        and e.get("judge_setup_hash") == setup.hash
+        and e.get("clearance", str(Clearance.PUBLIC_ONLY)) == str(setup.clearance)
         for e in read_log(root)
     )
 

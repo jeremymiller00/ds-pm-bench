@@ -196,7 +196,8 @@ models:
 
 Each judge model is asked for JSON in its provider's structured-output mode (a JSON Schema
 naming every Criterion). The key's `env_var` is not part of the hash.
-Its hash covers the models and the prompt, so editing either is a new Judge Setup.
+Its hash covers the mode, the models and the prompt, so editing any of them is a new
+Judge Setup.
 `Workspace.judge_run(run)` scores every unscored Output of a finished Run blind with a
 certified Judge Setup; an uncertified one needs `allow_uncertified=True`, and that
 override is logged to the Decision Log once a Task is judged (once per Run and Judge
@@ -218,12 +219,15 @@ scores, Run or Candidate) and `score_calibration_item(item_id, scores)` records 
 1-5 score per Criterion. `judge_calibration_set()` has the current Judge Setup score every
 item it has not, and `calibration_agreement()` reports per Criterion (and pooled) the
 share within 1 point and the quadratic weighted kappa. `certify_judge()` needs every item
-scored by both and every Criterion at or above `calibration.within_one_point` and
+scored by both, at least `calibration.min_items` of them (default 12), and every
+Criterion at or above `calibration.within_one_point` and
 `calibration.weighted_kappa` in settings (a Criterion whose kappa is undefined because
 both always gave the same score is held to the first only); it logs a
 `judge_certification` entry to the Decision Log, or raises `CertificationFailed` naming
-each shortfall. `judge_certified` reads that log for the current hash, so an edited
-judge model or prompt is uncertified until certified again.
+each shortfall. A Certification belongs to one Judge Setup hash and one Clearance
+(ADR 0002): `judge_certified` reads the log for the current hash and Clearance, so an
+edited mode, judge model or prompt is uncertified until certified again, and widening
+the Clearance to `public_and_private` drops it.
 
 ### Golden fixtures
 

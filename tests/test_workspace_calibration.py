@@ -1,3 +1,4 @@
+import dataclasses
 import datetime
 import json
 from pathlib import Path
@@ -12,6 +13,7 @@ from bench import (
     JudgeNotCertified,
     Workspace,
 )
+from bench.core.kinds import JudgeMode
 from test_workspace_candidates import candidate, write_candidate
 from test_workspace_judging import (
     CANDIDATE,
@@ -255,8 +257,14 @@ AGREEING = [{"clarity": s, "correctness": s} for s in (1, 2, 3, 4, 5)]
 CLOSE = [{"clarity": s, "correctness": s} for s in (1, 2, 3, 4, 4)]
 
 
+def allow_small_calibration_sets(ws: Workspace, min_items: int = 1) -> None:
+    """These tests certify on a few items; the default minimum is 12 (ADR-0002)."""
+    ws.update_settings(calibration={"min_items": min_items})
+
+
 def certified_workspace(ws_dir: Path) -> Workspace:
     ws = Workspace.open(ws_dir, judges=judges_for(CLOSE))
+    allow_small_calibration_sets(ws)
     calibration_set(ws, AGREEING, CLOSE)
     ws.judge_calibration_set()
     ws.certify_judge(on=DAY)
@@ -274,13 +282,49 @@ def test_a_judge_setup_meeting_the_thresholds_is_certified_and_logged(ws_dir: Pa
     assert entry["items"] == [i.id for i in ws.calibration_items()]
     assert entry["within_one_point"] == 1.0
     assert entry["weighted_kappa"] >= 0.6
-    assert entry["thresholds"] == {"within_one_point": 0.9, "weighted_kappa": 0.6}
+    assert entry["thresholds"] == {"within_one_point": 0.9, "weighted_kappa": 0.6,
+                                   "min_items": 1}
+    assert entry["clearance"] == "public_only"
     assert entry["criteria"]["clarity"]["weighted_kappa"] == pytest.approx(16 / 17)
     assert Workspace.open(ws_dir).judge_certified  # it is read back from the log
 
 
+def test_certification_needs_the_minimum_calibration_set_size(ws_dir: Path):
+    ws = Workspace.open(ws_dir, judges=judges_for(CLOSE))
+    calibration_set(ws, AGREEING, CLOSE)
+    ws.judge_calibration_set()
+    assert ws.settings.calibration.min_items == 12  # the committed default
+
+    with pytest.raises(CertificationFailed, match="5 items, fewer than the 12"):
+        ws.certify_judge(on=DAY)
+    assert ws.decision_log() == ()
+
+    allow_small_calibration_sets(ws, 5)
+    ws.certify_judge(on=DAY)
+    assert ws.judge_certified
+
+
+def test_widening_the_judges_clearance_to_private_tasks_drops_certification(ws_dir: Path):
+    ws = certified_workspace(ws_dir)
+    old_hash = ws.judge_setup.hash
+
+    ws.update_judge_setup(clearance="public_and_private")
+
+    assert ws.judge_setup.hash == old_hash
+    assert not ws.judge_certified
+    ws.update_judge_setup(clearance="public_only")
+    assert ws.judge_certified  # the Certification belongs to the public-only Clearance
+
+
+def test_the_judge_mode_is_part_of_the_judge_setup_hash(ws_dir: Path):
+    setup = Workspace.open(ws_dir).judge_setup
+
+    assert dataclasses.replace(setup, mode=JudgeMode.PANEL).hash != setup.hash
+
+
 def test_a_judge_setup_below_the_thresholds_is_not_certified(ws_dir: Path):
     ws = Workspace.open(ws_dir, judges=judges_for(JUDGED))
+    allow_small_calibration_sets(ws)
     calibration_set(ws, HUMAN, JUDGED)
     ws.judge_calibration_set()
 
@@ -297,6 +341,7 @@ def test_the_thresholds_come_from_the_settings(ws_dir: Path):
     data["calibration"]["weighted_kappa"] = 0.99
     path.write_text(yaml.safe_dump(data))
     ws = Workspace.open(ws_dir, judges=judges_for(CLOSE))
+    allow_small_calibration_sets(ws)
     calibration_set(ws, AGREEING, CLOSE)
     ws.judge_calibration_set()
 
@@ -306,6 +351,7 @@ def test_the_thresholds_come_from_the_settings(ws_dir: Path):
 
 def test_certification_needs_every_item_scored_by_the_human_and_the_judge(ws_dir: Path):
     ws = Workspace.open(ws_dir, judges=judges_for(CLOSE))
+    allow_small_calibration_sets(ws)
     with pytest.raises(CertificationFailed, match="empty"):
         ws.certify_judge(on=DAY)
     calibration_set(ws, AGREEING, CLOSE)

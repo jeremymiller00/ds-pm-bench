@@ -278,9 +278,9 @@ def test_a_private_root_inside_the_public_workspace_is_refused(
     assert "inside the public Workspace" in err.value.message
 
 
-# Pinned: editing the default judge.yaml models or prompt makes a new Judge Setup
+# Pinned: editing the default judge.yaml mode, models or prompt makes a new Judge Setup
 # (ADR-0003), so this changes only on purpose.
-DEFAULT_JUDGE_SETUP_HASH = "7bae56d113f3e624"
+DEFAULT_JUDGE_SETUP_HASH = "cb96d2c61ef2f09c"
 
 
 def test_the_default_judge_setup_is_one_public_only_openai_judge(workspace_dir: Path):

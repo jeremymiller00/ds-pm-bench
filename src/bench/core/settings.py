@@ -34,10 +34,16 @@ class Band:
     thresholds: tuple[float, float, float, float]
 
 
+# The smallest Calibration Set a Judge Setup is certified on when settings name none
+# (ADR-0002).
+DEFAULT_MIN_CALIBRATION_ITEMS = 12
+
+
 @dataclass(frozen=True)
 class CalibrationThresholds:
     within_one_point: float
     weighted_kappa: float
+    min_items: int = DEFAULT_MIN_CALIBRATION_ITEMS  # fully scored items Certification needs
 
 
 @dataclass(frozen=True)
@@ -105,7 +111,12 @@ def _parse(f: FieldReader, root: Path, data: dict[str, Any]) -> Settings:
             f"belongs in the git-ignored {LOCAL_FILE}, not the public settings",
         )
     calibration = f.mapping(data.get("calibration"), "calibration")
-    f.exact_keys(calibration, "calibration", ("within_one_point", "weighted_kappa"))
+    min_items = calibration.get("min_items", DEFAULT_MIN_CALIBRATION_ITEMS)
+    f.exact_keys({"min_items": min_items, **calibration}, "calibration",
+                 ("within_one_point", "weighted_kappa", "min_items"))
+    if isinstance(min_items, bool) or not isinstance(min_items, int) or min_items < 1:
+        raise f.fail("calibration.min_items",
+                     f"must be a whole number of at least 1, got {min_items!r}")
     return Settings(
         tracks=_tracks(f, data.get("tracks")),
         weights=_weights(f, data.get("weights")),
@@ -121,6 +132,7 @@ def _parse(f: FieldReader, root: Path, data: dict[str, Any]) -> Settings:
             weighted_kappa=f.fraction(
                 calibration["weighted_kappa"], "calibration.weighted_kappa"
             ),
+            min_items=min_items,
         ),
         normalization=_normalization(f, data.get("normalization")),
         private_roots=_load_private_roots(root),

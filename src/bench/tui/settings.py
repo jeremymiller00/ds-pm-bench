@@ -30,7 +30,7 @@ SettingsPane .warning { color: $warning; }
 """
 
 MARGINS = ("regression_margin", "retest_margin", "spot_check_rate")
-THRESHOLDS = ("within_one_point", "weighted_kappa")
+THRESHOLDS = ("within_one_point", "weighted_kappa", "min_items")
 
 
 class FieldError(FormError):
@@ -221,8 +221,9 @@ class SettingsPane(VerticalScroll):
         yield Static(f"Judge Setup ({JUDGE_FILE}).", markup=False)
         yield Static(self._judge_status(), id="judge-status", markup=False)
         yield Static(
-            "Changing the models or the prompt makes a new Judge Setup, which drops its "
-            "Certification until it is recalibrated. Mode and clearance do not.",
+            "Changing the mode, models or prompt makes a new Judge Setup, which drops its "
+            "Certification until it is recalibrated; so does widening clearance to "
+            "public_and_private.",
             id="judge-warning", classes="warning", markup=False,
         )
         yield Label("Mode")

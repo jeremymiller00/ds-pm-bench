@@ -9,9 +9,9 @@ config/judge.yaml names the Judge Setup:
              the provider's tools in bench.core.provider_registry), and env_var: the
              variable holding its API key (default <PROVIDER>_API_KEY)
 
-Its identity is a content hash of its models and the prompt the Judge sees, so editing
-either makes a new Judge Setup. The Judge sees the input, the Rubric, the Gold Answer and
-the final Output, never which Candidate produced it.
+Its identity is a content hash of its mode, models and the prompt the Judge sees, so
+editing any of them makes a new Judge Setup. The Judge sees the input, the Rubric, the
+Gold Answer and the final Output, never which Candidate produced it.
 """
 
 from __future__ import annotations
@@ -72,8 +72,10 @@ class JudgeSetup:
 
     @property
     def hash(self) -> str:
-        """The identity: a content hash of the models and the prompt the Judge sees."""
+        """The identity: a content hash of the mode, the models and the prompt the
+        Judge sees. Clearance is not part of it: it is a permission, checked apart."""
         content = {
+            "mode": str(self.mode),
             "models": self._model_identities(),
             "prompt": self.prompt,
             "reply_format": REPLY_FORMAT,

@@ -74,6 +74,7 @@ async def score_first(app: BenchApp, pilot, score: int) -> CalibrationScoreScree
 
 async def test_a_judge_setup_is_certified_from_a_fixture_calibration_set(ws_dir: Path):
     ws = Workspace.open(ws_dir, judges=FakeJudges(**{JUDGE: FakeJudge(score=4)}))
+    ws.update_settings(calibration={"min_items": 1})  # the default is 12 (ADR-0002)
     run = recorded_run(ws)
     app = BenchApp(ws)
     async with app.run_test(size=(120, 60)) as pilot:
@@ -151,6 +152,7 @@ async def test_a_bad_score_is_refused_on_the_scoring_screen(ws_dir: Path):
 
 
 def certify(ws: Workspace, run_id: str) -> None:
+    ws.update_settings(calibration={"min_items": 1})
     item = ws.add_calibration_item(run_id, "T1.1")
     ws.score_calibration_item(item.id, {c: 4 for c in item.criteria})
     ws.judge_calibration_set()

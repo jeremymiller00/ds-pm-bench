@@ -200,7 +200,7 @@ async def test_editing_the_judge_prompt_drops_certification(certified: Workspace
     assert "Certification dropped" in after
 
 
-async def test_a_clearance_only_edit_keeps_certification(certified: Workspace):
+async def test_widening_the_judge_clearance_drops_certification(certified: Workspace):
     app = BenchApp(certified)
     async with app.run_test() as pilot:
         await open_settings(app, pilot)
@@ -209,8 +209,8 @@ async def test_a_clearance_only_edit_keeps_certification(certified: Workspace):
         after = text(app, "#judge-status")
 
     assert certified.judge_setup.clearance == "public_and_private"
-    assert certified.judge_certified
-    assert ": certified" in after
+    assert not certified.judge_certified
+    assert "Certification dropped" in after
 
 
 async def test_a_refused_judge_setup_edit_is_shown_and_writes_nothing(ws_dir: Path):

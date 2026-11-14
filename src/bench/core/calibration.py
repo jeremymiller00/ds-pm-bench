@@ -81,6 +81,8 @@ class Agreement:
     unjudged: tuple[str, ...]
     within_one_point_threshold: float
     weighted_kappa_threshold: float
+    min_items: int  # the fewest fully scored items Certification needs
+    items: int  # items scored by both the human and this Judge Setup
 
     @property
     def shortfalls(self) -> tuple[str, ...]:
@@ -88,6 +90,11 @@ class Agreement:
         if not self.unscored and not self.unjudged and self.overall.items == 0:
             return ("the Calibration Set is empty",)
         found = []
+        if self.items < self.min_items:
+            found.append(
+                f"the Calibration Set has {self.items} items, fewer than the "
+                f"{self.min_items} Certification needs (calibration.min_items)"
+            )
         if self.unscored:
             found.append(f"no human score yet for {', '.join(self.unscored)}")
         if self.unjudged:
@@ -244,11 +251,12 @@ class CalibrationSet:
         path.write_text(yaml.safe_dump(reasons, sort_keys=False))
 
     def agreement(
-        self, setup_hash: str, within_one_point: float, kappa: float
+        self, setup_hash: str, within_one_point: float, kappa: float, min_items: int
     ) -> Agreement:
         """The Judge Setup's agreement with the human scores, with the thresholds."""
         pairs: dict[str, tuple[list[float], list[float]]] = {}
         unscored, unjudged = [], []
+        compared = 0
         for item in self.items():
             judged = item.judge_scores.get(setup_hash)
             if item.human_scores is None:
@@ -257,6 +265,7 @@ class CalibrationSet:
                 unjudged.append(item.id)
             if item.human_scores is None or judged is None:
                 continue
+            compared += 1
             for cid in item.criteria:
                 human, judge = pairs.setdefault(cid, ([], []))
                 human.append(item.human_scores[cid])
@@ -271,6 +280,8 @@ class CalibrationSet:
             unjudged=tuple(unjudged),
             within_one_point_threshold=within_one_point,
             weighted_kappa_threshold=kappa,
+            min_items=min_items,
+            items=compared,
         )
 
     def _record(self, item_id: str) -> dict[str, Any]:
