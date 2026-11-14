@@ -65,6 +65,15 @@ In the TUI's Tasks tab, `e` edits the highlighted Task and `n` scaffolds a new o
 Saving shows the Task's version, and whether the edit made a new one because a Run
 used the old (ADR 0003). Validation errors appear inline in the form.
 
+In the Runs tab, a Run of an automated Candidate gets **Send pending Tasks**: each Task
+with no raw Output yet is sent in the background, and a Task that errored twice is
+listed as failed; pressing it again retries only those. Enter on a Task whose raw
+Output is ready opens the Task screen with it in, to edit and save with `ctrl+s`
+(abandoning keeps the raw Output). **Judge Run** shows the Judge Setup and its hash and,
+until Certification exists, judges only through an explicit override that is logged to
+the Decision Log; it then lists each Task's Criterion scores with every Judge's reason,
+panel disagreements and same-family bias warnings.
+
 ### 1. Record a Run from results files
 
 A results folder holds one `<task id>.yaml` per Task in the Suite (an unknown key
