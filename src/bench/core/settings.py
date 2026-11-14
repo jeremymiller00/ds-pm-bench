@@ -10,6 +10,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+import yaml
+
 from bench.core.fields import FieldReader
 
 SETTINGS_FILE = "config/settings.yaml"
@@ -84,11 +86,12 @@ def _load_private_roots(root: Path) -> tuple[Path, ...]:
     if not (root / LOCAL_FILE).is_file():
         return ()
     f = FieldReader(LOCAL_FILE)
-    text = (root / LOCAL_FILE).read_text()
-    if not text.strip() or all(
-        not line.strip() or line.lstrip().startswith("#") for line in text.splitlines()
-    ):
-        return ()  # comments only, such as a fresh copy of the example
+    try:
+        empty = yaml.safe_load((root / LOCAL_FILE).read_text()) is None
+    except yaml.YAMLError:
+        empty = False  # f.read reports it, naming the file
+    if empty:
+        return ()  # blank or comments only, such as a fresh copy of the example
     data = f.read(root)
     for key in data:
         if key not in LOCAL_FIELDS:
