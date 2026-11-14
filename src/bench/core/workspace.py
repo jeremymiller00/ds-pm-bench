@@ -11,6 +11,7 @@ from typing import Any
 
 from bench.core.adapters import Clock, Editor, ExternalEditor, SystemClock
 from bench.core.attempts import Attempt
+from bench.core.automated import AdapterFactory, PendingOutput, load_pending, run_task
 from bench.core.candidates import (
     CANDIDATES_FOLDER,
     Candidate,
@@ -38,6 +39,7 @@ from bench.core.kinds import AdapterKind, Clearance, Suite
 from bench.core.lookup import find_by_id
 from bench.core.manual_time import ManualTimeStopwatch
 from bench.core.prices import PriceTable, load_prices
+from bench.core.providers import candidate_adapter
 from bench.core.results import TaskResult
 from bench.core.rubric import Rubric, load_rubric
 from bench.core.runs import (
@@ -72,7 +74,8 @@ class Workspace:
     """Opened from the repo root holding config/, Tasks, Candidates and Runs.
 
     tasks is replaced when a Task is created or edited, candidates when a Candidate is.
-    clock and editor are the Adapters for timing and $EDITOR; tests inject fakes.
+    clock and editor are the Adapters for timing and $EDITOR, and candidate_adapters
+    gives an automated Candidate its Adapter; tests inject fakes.
     """
 
     root: Path
@@ -83,11 +86,19 @@ class Workspace:
     candidates: tuple[Candidate, ...]
     clock: Clock
     editor: Editor
+    candidate_adapters: AdapterFactory
 
     @classmethod
     def open(
-        cls, path: str | Path, *, clock: Clock | None = None, editor: Editor | None = None
+        cls,
+        path: str | Path,
+        *,
+        clock: Clock | None = None,
+        editor: Editor | None = None,
+        candidate_adapters: AdapterFactory | None = None,
     ) -> Workspace:
+        """candidate_adapters defaults to the provider SDK Adapters (bench.core.providers),
+        reading API keys from the environment or the root's .env."""
         root = Path(path).resolve()
         settings = load_settings(root)
         rubric = load_rubric(root)
@@ -101,6 +112,7 @@ class Workspace:
             candidates=load_candidates(root),
             clock=clock or SystemClock(),
             editor=editor or ExternalEditor(),
+            candidate_adapters=candidate_adapters or (lambda c: candidate_adapter(c, root)),
         )
 
     @property
@@ -500,6 +512,37 @@ class Workspace:
             check_clearance(candidate, self.task(task_id))
 
         return Attempt(run, task_id, prompt, self.clock, self.editor, check_permitted)
+
+    def run_automated_task(self, run: Run, task_id: str) -> PendingOutput:
+        """Send a Task of an automated Run to its Candidate and store the raw Output
+        pending its edit pass; returns it (see bench.core.automated).
+
+        The latest Gate and Clearance are checked before any content is read
+        (GateNotPassed, ClearanceError), and the Adapter is built (MissingSecret for an
+        unset API key) before anything is sent. The Canonical Prompt and input go word
+        for word; latency is timed with the Clock and cost is tokens times the price
+        table, null with a note for a model it lacks. A tool error is retried exactly
+        once; a second raises CandidateToolError and stores nothing. A manual-assisted
+        Run, or a Task already recorded or already pending its edit, raises AttemptError.
+        """
+        if run.candidate.manual_assisted:
+            raise AttemptError(
+                f"Run {run.id}: Candidate {run.candidate_id} is {run.candidate.adapter}; "
+                f"only {AdapterKind.AUTOMATED} Candidates' Tasks can be sent automatically"
+            )
+        prompt = self.task_input(run, task_id)
+        if task_id not in run.pending:
+            raise AttemptError(f"Run {run.id}: Task {task_id}'s Output is already recorded")
+        if load_pending(run, task_id) is not None:
+            raise AttemptError(
+                f"Run {run.id}: Task {task_id} already has a raw Output awaiting its edit"
+            )
+        adapter = self.candidate_adapters(run.candidate)
+        return run_task(run, task_id, prompt, adapter, self.clock, self.prices)
+
+    def pending_output(self, run: Run, task_id: str) -> PendingOutput | None:
+        """A Task's raw Output awaiting its edit pass, or None if it has none."""
+        return load_pending(run, task_id)
 
     def run_ids(self) -> tuple[str, ...]:
         """The id of every Run under runs/, newest first, for choosing one to resume."""
