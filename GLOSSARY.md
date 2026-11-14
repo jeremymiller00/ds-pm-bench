@@ -101,7 +101,7 @@ The numbers recorded for one Task in a Run: Criterion scores, Edit Distance, act
 _Avoid_: Result (alone), outcome
 
 **Attempt**:
-One manual-assisted pass at a Task within a Run, from showing the Canonical Prompt to saving the final. An Attempt can be abandoned, which records nothing.
+One pass at a Task within a Run, ending when the final is saved. For a manual-assisted Candidate it starts by showing the Canonical Prompt; for an automated one it starts with the raw Output already returned. An Attempt can be abandoned, which records nothing.
 _Avoid_: Session
 
 **Comparison**:
