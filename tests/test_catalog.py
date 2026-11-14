@@ -105,3 +105,32 @@ def test_a_clash_is_a_task_authoring_error(workspace_dir: Path, private_root: Pa
 
     with pytest.raises(TaskAuthoringError, match="T2.2"):
         Workspace.open(workspace_dir).scaffold_catalog(private_root)
+
+
+def test_refuses_writing_nothing_when_a_catalog_track_is_not_configured(
+    workspace_dir: Path, private_root: Path, capsys: pytest.CaptureFixture[str]
+):
+    settings = workspace_dir / "config" / "settings.yaml"
+    settings.write_text(settings.read_text().replace(", Story]", "]"))
+
+    assert scaffold(workspace_dir, private_root) == 1
+
+    assert "Story" in capsys.readouterr().err
+    assert list(private_root.rglob("*")) == []
+    assert Workspace.open(workspace_dir).tasks == ()
+
+
+def test_a_catalog_task_failing_mid_way_leaves_nothing_behind(
+    workspace_dir: Path, private_root: Path, capsys: pytest.CaptureFixture[str]
+):
+    # A shared Criterion that a later catalog Task (T2.3) also defines.
+    rubric = workspace_dir / "config" / "rubric.yaml"
+    rubric.write_text(
+        rubric.read_text()
+        + "  - id: gap_list\n    name: Gap list\n    description: Lists the gaps.\n"
+    )
+
+    assert scaffold(workspace_dir, private_root) == 1
+
+    assert "gap_list" in capsys.readouterr().err
+    assert list(private_root.rglob("*")) == []

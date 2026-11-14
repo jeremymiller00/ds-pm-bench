@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import datetime
+import shutil
 from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
@@ -33,7 +34,7 @@ from bench.core.runs import (
     tasks_in,
 )
 from bench.core.scoring import RunScore, score_run
-from bench.core.settings import Settings, load_settings
+from bench.core.settings import SETTINGS_FILE, Settings, load_settings
 from bench.core.tasks import (
     CriterionSpec,
     Task,
@@ -149,9 +150,15 @@ class Workspace:
 
         Each gets its Track, Trap and task-specific Criteria, with a placeholder
         input, Gold Answer, Manual Time and Canonical Prompt. Refuses, writing
-        nothing, if any catalog Task already exists.
+        nothing, if any catalog Task already exists or its Track is not configured;
+        should a Task still fail to scaffold, the ones already written are removed.
         """
         root = self._private_root(private_root)
+        unknown = sorted({e.track for e in CATALOG} - set(self.settings.tracks))
+        if unknown:
+            raise TaskAuthoringError(
+                f"catalog Tracks missing from {SETTINGS_FILE}: {', '.join(unknown)}"
+            )
         clashes = [
             entry.id
             for entry in CATALOG
@@ -162,10 +169,21 @@ class Workspace:
             raise TaskAuthoringError(
                 f"catalog Tasks already exist, not overwriting: {', '.join(clashes)}"
             )
-        return tuple(
-            self.create_task(entry.id, private_root=root.path, **entry.create_args())
-            for entry in CATALOG
-        )
+        folder_existed = root.tasks_folder.exists()
+        created: list[Task] = []
+        try:
+            for entry in CATALOG:
+                created.append(
+                    self.create_task(entry.id, private_root=root.path, **entry.create_args())
+                )
+        except BaseException:
+            for task in created:
+                shutil.rmtree(task.folder)
+            if not folder_existed:
+                shutil.rmtree(root.tasks_folder, ignore_errors=True)
+            self._reload_tasks()
+            raise
+        return tuple(created)
 
     def _private_root(self, path: str | Path) -> TaskRoot:
         resolved = (self.root / Path(path).expanduser()).resolve()
