@@ -138,6 +138,9 @@ The Judge model or panel plus the judge prompt, identified by a content hash.
 **Spot-check**:
 A human scoring of a sampled Output during a Run, used to detect Judge drift.
 
+**Spot-check queue**:
+The Tasks of a judged Run sampled for a Spot-check: the configured share, seeded from the Run id, covering the Tracks the same Candidate's previous Run did not, plus every Task marked for a full human check. A Comparison reaches no Verdict until both Runs' queues are finished.
+
 **Calibration Set**:
 A fixed collection of Outputs scored blind by a human expert, used to test the Judge.
 
