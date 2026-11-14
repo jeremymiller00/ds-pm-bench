@@ -83,9 +83,11 @@ from bench.core.runs import (
     suites_for,
     task_versions_used,
     tasks_in,
+    tracks_spot_checked_before,
 )
 from bench.core.scoring import RunScore, score_run
 from bench.core.settings import SETTINGS_FILE, Settings, edit_settings, load_settings
+from bench.core.spot_checks import spot_check_queue
 from bench.core.tasks import (
     CriterionSpec,
     Task,
@@ -629,7 +631,8 @@ class Workspace:
         judged, and only once per Run and Judge Setup, so a resumed judging logs nothing
         new. A malformed reply raises JudgeReplyError; Tasks judged before it stay
         recorded, so judging again resumes. A same-family judge model marks every Task
-        for a full human check.
+        for a full human check. Once every Task is judged, the Run's Spot-check queue is
+        sampled (bench.core.spot_checks), once.
         """
         setup = self.judge_setup
         if setup is None:
@@ -688,7 +691,20 @@ class Workspace:
             if not override_logged(self.root, run.id, setup.hash):
                 log_override(self.root, self.clock.today(), run.id, candidate.id, setup.hash)
             judged.append(judging)
+        self._queue_spot_checks(run)
         return tuple(judged)
+
+    def _queue_spot_checks(self, run: Run) -> None:
+        """Once every Task is judged, sample the Run's Spot-check queue (set only once)."""
+        if run.unjudged or run.judge_setup_hash is None:
+            return
+        run.queue_spot_checks(spot_check_queue(
+            run.id,
+            run.tasks,
+            self.settings.spot_check_rate,
+            covered_before=tracks_spot_checked_before(self.root, run),
+            full_checks=run.full_human_checks,
+        ))
 
     def _judge_model(self, spec: JudgeModelSpec) -> JudgeModel:
         if self.judges is None:
@@ -795,7 +811,9 @@ class Workspace:
     def compare(self, challenger_run_id: str, baseline_run_id: str) -> Comparison:
         """Compare a challenger Run with a Baseline Run and reach a Verdict.
 
-        Spot-checks recorded on either Run (Run.record_spot_check) are weighed too.
+        Spot-checks recorded on either Run (Run.record_spot_check) are weighed too, and
+        a Run with queued Spot-checks left (Run.spot_checks_left) is refused
+        (SpotChecksUnfinished).
         The Baseline must hold a passing Gate: its latest review applies (GateNotPassed).
         """
         baseline = self.baseline
