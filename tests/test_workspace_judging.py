@@ -484,6 +484,10 @@ def judged_comparison(ws_dir: Path, *, rejudge_challenger_with: str | None = Non
     challenger.record_output("T1.1", raw="draft", final=OUTPUT, active_seconds=60,
                              latency_seconds=5, cost_usd=None)
     ws.judge_run(challenger, allow_uncertified=True)
+    for run in (baseline, challenger):  # the Spot-check queue gates the Verdict
+        for task_id, criteria in run.spot_checks_left.items():
+            for criterion in criteria:
+                run.record_spot_check(task_id, criterion, 4)
     return ws, ws.compare(challenger.id, baseline.id)
 
 
