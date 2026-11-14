@@ -88,3 +88,43 @@ def test_a_manual_task_records_latency_to_paste_and_active_time_to_save(
         "Predict churn for all customers next year."
     )
     assert (run.folder / "final" / "T1.1.md").read_text() == "Predict SMB churn 60 days ahead."
+
+
+def test_pauses_in_the_built_in_editor_are_not_active_time(ws_dir: Path, clock: FakeClock):
+    ws = open_ws(ws_dir, clock)
+    run = ws.start_run(CANDIDATE, on=DAY)
+    session = ws.begin_manual_task(run, "T1.1")
+    clock.advance(60)
+    session.submit_raw("raw")
+    clock.advance(100)
+    session.pause()
+    assert session.paused
+    clock.advance(1000)  # interrupted
+    session.resume()
+    clock.advance(40)
+    assert session.active_seconds == 200  # a running timer for the TUI
+    session.pause()
+    clock.advance(500)  # still paused when saved: does not count
+
+    record = session.finish("final")
+
+    assert record.latency_seconds == 60
+    assert record.active_seconds == 200
+
+
+def test_pausing_is_only_for_editing_and_cannot_be_doubled(ws_dir: Path, clock: FakeClock):
+    ws = open_ws(ws_dir, clock)
+    session = ws.begin_manual_task(ws.start_run(CANDIDATE, on=DAY), "T1.1")
+
+    with pytest.raises(ValueError, match="raw Output"):
+        session.pause()
+    with pytest.raises(ValueError, match="raw Output"):
+        session.finish("final")
+    session.submit_raw("raw")
+    with pytest.raises(ValueError, match="already"):
+        session.submit_raw("again")
+    with pytest.raises(ValueError, match="not paused"):
+        session.resume()
+    session.pause()
+    with pytest.raises(ValueError, match="already paused"):
+        session.pause()
