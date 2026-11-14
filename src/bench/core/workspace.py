@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import datetime
 import shutil
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -712,6 +712,12 @@ class Workspace:
         never the Judge's scores, the Run or the Candidate."""
         cal = self.calibration_set
         return tuple(cal.blind(i.id) for i in cal.items() if not i.human_scored)
+
+    def score_calibration_item(self, item_id: str, scores: Mapping[str, int]) -> CalibrationItem:
+        """Record the human's blind score, a whole number 1-5, of every Criterion of a
+        Calibration Set item; scoring it again replaces the earlier scores. Scores not
+        matching its Criteria raise CalibrationError and change nothing."""
+        return self.calibration_set.record_human_scores(item_id, scores)
 
     def _judge_model(self, spec: JudgeModelSpec) -> JudgeModel:
         if self.judges is None:
