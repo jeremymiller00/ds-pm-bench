@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -56,7 +57,7 @@ def parse_rubric_edit(criteria: Any) -> Rubric:
     """The shared Rubric criteria would make, validated as on load (ConfigError naming
     the field); nothing is written."""
     f = FieldReader(RUBRIC_FILE)
-    entries = [dict(c) for c in criteria] if isinstance(criteria, (list, tuple)) else criteria
+    entries = plain_list(criteria)
     return Rubric(criteria=parse_criteria(f, entries, "criteria"))
 
 
@@ -88,3 +89,11 @@ def parse_criteria(f: FieldReader, value: Any, field: str) -> tuple[Criterion, .
             )
         )
     return tuple(criteria)
+
+
+def plain_list(value: Any) -> Any:
+    """A list of mappings as plain dicts, for validation; anything else as it is, so
+    validation refuses it naming the field."""
+    if not isinstance(value, (list, tuple)):
+        return value
+    return [dict(v) if isinstance(v, Mapping) else v for v in value]

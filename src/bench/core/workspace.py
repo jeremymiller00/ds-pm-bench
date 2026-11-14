@@ -95,6 +95,7 @@ from bench.core.rubric import (
     criterion_dict,
     load_rubric,
     parse_rubric_edit,
+    plain_list,
     write_rubric,
 )
 from bench.core.runs import (
@@ -947,12 +948,12 @@ class Workspace:
         Certification (ADR-0002). Runs keep the hash of the Judge Setup that judged them.
         """
         given = {"mode": mode, "clearance": clearance, "prompt": prompt_file,
-                 "models": None if models is None else [dict(m) for m in models]}
+                 "models": None if models is None else plain_list(models)}
         changes = {k: v for k, v in given.items() if v is not None}
         self.judge_setup = edit_judge_setup(self.root, changes, prompt)
         return self.judge_setup
 
-    def update_rubric(self, criteria: Iterable[Mapping[str, Any]]) -> Rubric:
+    def update_rubric(self, criteria: list[Mapping[str, Any]]) -> Rubric:
         """Replace the shared Rubric's Criteria, each {id, name, description}, in order:
         adding, editing or removing a shared Criterion (story 63).
 
@@ -962,7 +963,7 @@ class Workspace:
         nothing is written. The Rubric being replaced is archived by hash first, so a Run
         keeps scoring on the Rubric it started with (ADR-0003).
         """
-        rubric = parse_rubric_edit(list(criteria))
+        rubric = parse_rubric_edit(criteria)
         ctx = TaskContext(self.root, self.settings.private_roots, rubric, self.settings.tracks)
         try:
             load_tasks(ctx)

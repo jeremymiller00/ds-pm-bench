@@ -169,7 +169,7 @@ class SettingsPane(VerticalScroll):
         area = self.query_one("#rubric-criteria", TextArea)
         try:
             criteria = yaml_list(area.text, RUBRIC_FILE, "criteria")
-            self.workspace.update_rubric(criteria if isinstance(criteria, list) else [criteria])
+            self.workspace.update_rubric(criteria)
         except ConfigError as error:
             status.update("Not saved.")
             self._show_error(error, "rubric-form", "err-rubric")
