@@ -31,6 +31,7 @@ from bench.core.errors import (
     RunExists,
     RunIncomplete,
     RunMismatch,
+    SpotCheckError,
     SuiteUnavailable,
     UnknownRunError,
     UnknownTaskError,
@@ -301,14 +302,11 @@ class Run:
         """Record a human's 1-5 score of one Criterion the Judge already scored.
 
         Recording the same Task and Criterion again replaces the earlier human score.
+        A refused score raises SpotCheckError and records nothing.
         """
         task = self.task(task_id)
+        self.check_spot_check(task.id, criterion, human_score)
         task_record = self._task_record(task.id)
-        if task_record is None or "criterion_scores" not in task_record:
-            raise ValueError(f"Run {self.id}: Task {task.id} has no Criterion scores to check")
-        if criterion not in task_record["criterion_scores"]:
-            raise ValueError(f"Task {task.id}: {criterion!r} is not a Criterion of its Rubric")
-        check_criterion_score(human_score, f"Task {task.id}: Spot-check {criterion}")
         task_record.setdefault("spot_checks", {})[criterion] = human_score
         self._write_task_record(task.id, task_record)
         return SpotCheck(
@@ -318,6 +316,19 @@ class Run:
             judge_score=task_record["criterion_scores"][criterion],
             human_score=human_score,
         )
+
+    def check_spot_check(self, task_id: str, criterion: str, human_score: Any) -> None:
+        """SpotCheckError unless the score could be recorded as a Spot-check."""
+        task = self.task(task_id)
+        task_record = self._task_record(task.id)
+        if task_record is None or "criterion_scores" not in task_record:
+            raise SpotCheckError(f"Run {self.id}: Task {task.id} has no Criterion scores to check")
+        if criterion not in task_record["criterion_scores"]:
+            raise SpotCheckError(f"Task {task.id}: {criterion!r} is not a Criterion of its Rubric")
+        try:
+            check_criterion_score(human_score, f"Task {task.id}: Spot-check {criterion}")
+        except ValueError as exc:
+            raise SpotCheckError(str(exc)) from None
 
     @property
     def spot_check_queue(self) -> tuple[str, ...]:

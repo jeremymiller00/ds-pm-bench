@@ -15,9 +15,8 @@ from textual.screen import Screen
 from textual.widgets import Footer, Label, OptionList, Static
 from textual.widgets.option_list import Option
 
-from bench.core.errors import CalibrationError, RunMismatch, UnknownRunError
+from bench.core.errors import CalibrationError, RunMismatch, SpotCheckError, UnknownRunError
 from bench.core.judging import BlindOutput
-from bench.core.rubric import check_criterion_score
 from bench.core.runs import Run
 from bench.core.workspace import Workspace
 from bench.tui.calibration import blind_content, read_scores, score_fields
@@ -73,7 +72,7 @@ class SpotCheckScreen(Screen[None]):
             if checked:
                 self._status(f"{item.id} Spot-checked.")
 
-        self.app.push_screen(SpotCheckTaskScreen(self.run, item), closed)
+        self.app.push_screen(SpotCheckTaskScreen(self.workspace, self.run, item), closed)
 
     @on(OptionList.OptionSelected, "#spot-checked")
     def _add_to_calibration(self, event: OptionList.OptionSelected) -> None:
@@ -108,8 +107,9 @@ class SpotCheckTaskScreen(Screen[bool | None]):
         Binding("escape", "leave", "Back without saving"),
     ]
 
-    def __init__(self, run: Run, item: BlindOutput) -> None:
+    def __init__(self, workspace: Workspace, run: Run, item: BlindOutput) -> None:
         super().__init__()
+        self.workspace = workspace
         self.run = run
         self.item = item
 
@@ -126,11 +126,8 @@ class SpotCheckTaskScreen(Screen[bool | None]):
     def action_save(self) -> None:
         try:
             scores = read_scores(self, [c.id for c in self.item.criteria])
-            for criterion, score in scores.items():  # all valid before any is recorded
-                check_criterion_score(score, f"Spot-check {criterion}")
-            for criterion, score in scores.items():
-                self.run.record_spot_check(self.item.id, criterion, score)
-        except ValueError as exc:
+            self.workspace.record_spot_checks(self.run, self.item.id, scores)
+        except (ValueError, SpotCheckError) as exc:
             self.query_one("#spot-score-error", Static).update(str(exc))
             return
         self.dismiss(True)

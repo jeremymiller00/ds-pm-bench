@@ -84,6 +84,7 @@ from bench.core.results import TaskResult
 from bench.core.rubric import Rubric, load_rubric
 from bench.core.runs import (
     Run,
+    SpotCheck,
     candidate_ids_used,
     check_clearance,
     check_gate,
@@ -706,6 +707,19 @@ class Workspace:
         left = run.spot_checks_left.get(task.id, ())
         criteria = tuple(c for c in task.rubric.criteria if c.id in left)
         return blind_output(task.id, task, run.final_output(task.id), criteria)
+
+    def record_spot_checks(
+        self, run: Run, task_id: str, scores: Mapping[str, Any]
+    ) -> tuple[SpotCheck, ...]:
+        """Record a human's 1-5 Spot-check score of each Criterion in scores for a judged
+        Task of the Run. Every score is checked before any is recorded: one refused
+        raises SpotCheckError naming it, and nothing is recorded."""
+        for criterion, score in scores.items():
+            run.check_spot_check(task_id, criterion, score)
+        return tuple(
+            run.record_spot_check(task_id, criterion, score)
+            for criterion, score in scores.items()
+        )
 
     @property
     def calibration_set(self) -> CalibrationSet:

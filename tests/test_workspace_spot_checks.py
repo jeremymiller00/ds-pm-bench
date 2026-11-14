@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from bench import SpotChecksUnfinished, Workspace
+from bench import SpotCheckError, SpotChecksUnfinished, Workspace
 from test_workspace_candidates import candidate, write_candidate
 from test_workspace_judging import FakeJudges, write_judge_setup
 from test_workspace_tasks import write_task
@@ -178,3 +178,20 @@ def test_a_spot_check_shows_the_output_blind_with_the_criteria_left(ws_dir: Path
     assert blind.gold_answer.startswith("Problem: predict SMB churn")
     assert [c.id for c in blind.criteria] == list(run.spot_checks_left[task_id])
     assert "clarity" not in [c.id for c in blind.criteria]
+
+
+def test_spot_check_scores_are_all_checked_before_any_is_recorded(ws_dir: Path):
+    ws = Workspace.open(ws_dir, judges=FakeJudges())
+    run = judged_run(ws)
+    task_id = run.spot_check_queue[0]
+
+    with pytest.raises(SpotCheckError, match="clarity"):
+        ws.record_spot_checks(run, task_id, {"correctness": 4, "clarity": 9})
+    with pytest.raises(SpotCheckError, match="no_such"):
+        ws.record_spot_checks(run, task_id, {"correctness": 4, "no_such": 3})
+    assert run.spot_checks == ()
+
+    checks = ws.record_spot_checks(run, task_id, {"correctness": 4, "clarity": 2})
+
+    assert [(c.criterion, c.human_score) for c in checks] == [("correctness", 4), ("clarity", 2)]
+    assert run.spot_checks_left[task_id][:1] == ("completeness",)

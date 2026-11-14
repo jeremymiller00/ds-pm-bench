@@ -92,6 +92,11 @@ class SpotChecksUnfinished(Exception):
     human has not finished: a Verdict is never computed on unchecked judging."""
 
 
+class SpotCheckError(ValueError):
+    """A Spot-check score was refused: a Task with no Criterion scores to check, a
+    Criterion not in its Rubric, or a score outside 1-5. Nothing is recorded."""
+
+
 class JudgingError(Exception):
     """Judging a Run was refused or failed; every judging error is one of these."""
 
