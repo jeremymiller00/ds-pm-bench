@@ -1,10 +1,9 @@
-import subprocess
 import sys
 from pathlib import Path
 
 import pytest
 
-from bench import ExternalEditor, SystemClock
+from bench import EditorError, ExternalEditor, SystemClock
 
 
 def scripted_editor(tmp_path: Path) -> str:
@@ -38,9 +37,14 @@ def test_an_editor_that_fails_raises_and_leaves_no_temp_file(tmp_path: Path):
         "raise SystemExit(1)\n"
     )
 
-    with pytest.raises(subprocess.CalledProcessError):
+    with pytest.raises(EditorError, match="exited with status 1"):
         ExternalEditor(f"{sys.executable} {script}").edit("draft")
     assert not Path(seen.read_text()).exists()
+
+
+def test_an_editor_that_cannot_be_started_raises_an_editor_error():
+    with pytest.raises(EditorError, match="no-such-editor-xyz"):
+        ExternalEditor("no-such-editor-xyz").edit("draft")
 
 
 def test_the_system_clock_never_goes_backwards():

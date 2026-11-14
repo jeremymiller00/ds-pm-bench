@@ -6,8 +6,6 @@ what they report and passes on what the person types.
 
 from __future__ import annotations
 
-import subprocess
-
 from textual import on
 from textual.app import ComposeResult, SuspendNotSupported
 from textual.binding import Binding
@@ -21,6 +19,7 @@ from bench.core.errors import (
     AttemptError,
     ClearanceError,
     ConfigError,
+    EditorError,
     GateNotPassed,
     RunExists,
     RunMismatch,
@@ -306,7 +305,7 @@ class ManualTaskScreen(Screen[OutputRecord | None]):
             self.attempt.check_editable()  # refuse before giving up the terminal
             with self.app.suspend():
                 draft = self.attempt.edit_externally()
-        except (AttemptError, SuspendNotSupported, subprocess.CalledProcessError) as exc:
+        except (AttemptError, EditorError, SuspendNotSupported) as exc:
             self._error(str(exc))
             return
         self.query_one("#task-draft", TextArea).text = draft

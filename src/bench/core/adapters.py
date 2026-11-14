@@ -15,6 +15,8 @@ import time
 from pathlib import Path
 from typing import Protocol
 
+from bench.core.errors import EditorError
+
 
 class Clock(Protocol):
     """Time for the harness: now() is seconds on a monotonic scale, where only
@@ -27,7 +29,8 @@ class Clock(Protocol):
 
 
 class Editor(Protocol):
-    """Opens text for a person to edit and returns it once they close the editor."""
+    """Opens text for a person to edit and returns it once they close the editor;
+    EditorError if it cannot."""
 
     def edit(self, text: str) -> str: ...
 
@@ -44,7 +47,8 @@ class ExternalEditor:
     """Runs $VISUAL or $EDITOR (vi if neither is set) on a temporary Markdown file.
 
     It blocks until the editor exits, so a TUI must suspend itself around edit().
-    The temporary file is removed afterwards.
+    The temporary file is removed afterwards. An editor that cannot start, or exits
+    with an error, raises EditorError.
     """
 
     def __init__(self, command: str | None = None) -> None:
@@ -57,7 +61,14 @@ class ExternalEditor:
         try:
             with os.fdopen(fd, "w") as f:
                 f.write(text)
-            subprocess.run([*shlex.split(command), str(path)], check=True)
+            try:
+                subprocess.run([*shlex.split(command), str(path)], check=True)
+            except subprocess.CalledProcessError as exc:
+                raise EditorError(
+                    f"editor {command!r} exited with status {exc.returncode}"
+                ) from exc
+            except OSError as exc:
+                raise EditorError(f"editor {command!r} could not start: {exc}") from exc
             return path.read_text()
         finally:
             path.unlink(missing_ok=True)

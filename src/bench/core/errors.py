@@ -56,6 +56,11 @@ class AttemptError(Exception):
     already recorded, a step out of order, or an Attempt already over."""
 
 
+class EditorError(Exception):
+    """The Editor Adapter could not edit the text: $EDITOR failed to start or exited
+    with an error."""
+
+
 class UnknownRunError(LookupError):
     """No Run with the requested id under runs/."""
 
