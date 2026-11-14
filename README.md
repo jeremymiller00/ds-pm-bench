@@ -250,6 +250,17 @@ each shortfall. A Certification belongs to one Judge Setup hash and one Clearanc
 edited mode, judge model or prompt is uncertified until certified again, and widening
 the Clearance to `public_and_private` drops it.
 
+From the command line (thin over the same Workspace calls):
+
+```sh
+bench judge 2026-11-13-other@1 [--allow-uncertified]   # judge_run; the override is logged
+bench calibrate add 2026-11-13-other@1 T1.1-example    # add_calibration_item
+bench calibrate status                                  # calibration_agreement
+bench calibrate certify [--on 2026-11-13]               # certify_judge
+```
+
+Human scoring stays in the TUI's Calibration tab, where it is blind.
+
 ### Golden fixtures
 
 `tests/fixtures/golden/<case>/` holds the Candidates and results files for one

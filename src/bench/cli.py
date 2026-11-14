@@ -9,6 +9,10 @@
   bench verdict CHALLENGER_RUN BASELINE_RUN [...]    compare two Runs, print the Verdict
   bench verdict --gate CANDIDATE [...]               the Verdict for a failed Gate
   bench scaffold-catalog --root PRIVATE_ROOT         create the 12 catalog Tasks there
+  bench judge RUN_ID [--allow-uncertified]           score a finished Run with the Judge
+  bench calibrate add RUN_ID TASK [--on DATE]        add an Output to the Calibration Set
+  bench calibrate status                             the Judge Setup's agreement
+  bench calibrate certify [--on DATE]                certify the Judge Setup
 
 A results directory holds one <task id>.yaml per Task, with raw, final,
 active_seconds, latency_seconds, cost_usd and (optionally) criterion_scores.
@@ -19,14 +23,16 @@ from __future__ import annotations
 import argparse
 import datetime
 import sys
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from pathlib import Path
 
 import yaml
 
+from bench.core.calibration import CriterionAgreement
 from bench.core.errors import (
     ClearanceError,
     GateNotPassed,
+    JudgingError,
     RunExists,
     RunIncomplete,
     RunMismatch,
@@ -39,13 +45,15 @@ from bench.core.verdicts import Verdict
 from bench.core.workspace import Workspace
 from bench.wiring import open_workspace
 
-# Refusals the CLI reports as one line rather than a traceback. ConfigError and the
-# Unknown*Error lookups are ValueError and LookupError subclasses.
+# Refusals the CLI reports as one line rather than a traceback. ConfigError,
+# CalibrationError and the Unknown*Error lookups are ValueError and LookupError
+# subclasses.
 _REFUSALS = (
     ValueError,
     LookupError,
     ClearanceError,
     GateNotPassed,
+    JudgingError,
     RunExists,
     RunIncomplete,
     RunMismatch,
@@ -55,7 +63,12 @@ _REFUSALS = (
 )
 
 
-def main(argv: Sequence[str] | None = None) -> int:
+def main(
+    argv: Sequence[str] | None = None,
+    *,
+    open_workspace: Callable[[str], Workspace] = open_workspace,
+) -> int:
+    """open_workspace builds the Workspace; tests pass one with fake Adapters."""
     args = _parser().parse_args(argv)
     try:
         ws = open_workspace(args.workspace)
@@ -137,6 +150,61 @@ def _scaffold_catalog(ws: Workspace, args: argparse.Namespace) -> int:
         print(f"created {task.id} ({task.track}) in {task.folder}")
     print(f"created {len(tasks)} Private Tasks; placeholders: {', '.join(tasks[0].placeholders)}")
     return 0
+
+
+def _judge(ws: Workspace, args: argparse.Namespace) -> int:
+    run = ws.resume_run(args.run_id)
+    certified = ws.judge_certified
+    judged = ws.judge_run(run, allow_uncertified=args.allow_uncertified)
+    for judging in judged:
+        scores = ", ".join(f"{c} {s:g}" for c, s in judging.scores.items())
+        flags = [f"Panel disagreement on {', '.join(judging.disagreements)}"
+                 if judging.disagreements else "",
+                 "same-family judge model" if judging.same_family else ""]
+        flagged = "".join(f"; {f}" for f in flags if f)
+        print(f"judged {judging.output_id}: {scores}{flagged}")
+    if not judged:
+        print(f"Run {run.id}: nothing to judge, every Output is scored")
+    elif not certified:
+        print("judged with an uncertified Judge Setup: the override is in the Decision Log")
+    return 0
+
+
+def _calibrate_add(ws: Workspace, args: argparse.Namespace) -> int:
+    item = ws.add_calibration_item(args.run_id, args.task, on=args.on)
+    print(f"added {item.id}: Run {item.run_id}'s Output of Task {item.task_id}; "
+          "score it blind in the TUI's Calibration tab")
+    return 0
+
+
+def _calibrate_status(ws: Workspace, args: argparse.Namespace) -> int:
+    setup = ws.judge_setup
+    if setup is None:
+        print("no Judge Setup")
+        return 0
+    print(f"Judge Setup {setup.hash}: "
+          f"{'certified' if ws.judge_certified else 'not certified'}")
+    agreement = ws.calibration_agreement()
+    print(f"  {len(ws.calibration_items())} items, {agreement.items} scored by both "
+          f"(Certification needs {agreement.min_items})")
+    for cid, a in agreement.criteria.items():
+        print(f"  {cid}: {_agreement(a)}")
+    print(f"  overall: {_agreement(agreement.overall)}")
+    for shortfall in agreement.shortfalls:
+        print(f"  not certifiable: {shortfall}")
+    return 0
+
+
+def _calibrate_certify(ws: Workspace, args: argparse.Namespace) -> int:
+    agreement = ws.certify_judge(on=args.on)
+    print(f"certified Judge Setup {agreement.judge_setup_hash}: "
+          f"{_agreement(agreement.overall)}")
+    return 0
+
+
+def _agreement(a: CriterionAgreement) -> str:
+    kappa = "n/a" if a.weighted_kappa is None else f"{a.weighted_kappa:.2f}"
+    return f"{a.within_one_point:.0%} within 1 point, weighted kappa {kappa} ({a.items} scores)"
 
 
 def _print_verdict(verdict: Verdict) -> None:
@@ -226,4 +294,25 @@ def _parser() -> argparse.ArgumentParser:
         help="a private root listed in config/local.yaml",
     )
     catalog.set_defaults(command=_scaffold_catalog)
+
+    judge = commands.add_parser("judge", help="score a finished Run's Outputs with the Judge")
+    judge.add_argument("run_id", metavar="RUN_ID")
+    judge.add_argument(
+        "--allow-uncertified", action="store_true",
+        help="judge with an uncertified Judge Setup; the override is logged",
+    )
+    judge.set_defaults(command=_judge)
+
+    calibrate = commands.add_parser("calibrate", help="the Calibration Set and Certification")
+    steps = calibrate.add_subparsers(metavar="STEP", required=True)
+    add = steps.add_parser("add", help="add a finished Run's Output of a Task to the set")
+    add.add_argument("run_id", metavar="RUN_ID")
+    add.add_argument("task", metavar="TASK")
+    add.add_argument("--on", type=_date, help="the date added (default: today)")
+    add.set_defaults(command=_calibrate_add)
+    status = steps.add_parser("status", help="the Judge Setup's agreement and Certification")
+    status.set_defaults(command=_calibrate_status)
+    certify = steps.add_parser("certify", help="certify the Judge Setup, logged")
+    certify.add_argument("--on", type=_date, help="the Decision Log date (default: today)")
+    certify.set_defaults(command=_calibrate_certify)
     return parser
