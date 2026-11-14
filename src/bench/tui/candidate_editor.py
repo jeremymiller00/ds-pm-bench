@@ -12,9 +12,9 @@ from textual.containers import VerticalScroll
 from textual.screen import ModalScreen
 from textual.widgets import Button, Checkbox, Input, Label, Select, Static, TextArea
 
-from bench.core.candidates import ADAPTER_KINDS, Candidate
+from bench.core.candidates import Candidate
 from bench.core.errors import CandidateAuthoringError, ConfigError
-from bench.core.kinds import Clearance
+from bench.core.kinds import AdapterKind, Clearance
 from bench.core.verdicts import Verdict
 from bench.core.workspace import Workspace
 from bench.tui.task_editor import EDITOR_CSS, FormError
@@ -45,7 +45,7 @@ class NewCandidateScreen(ModalScreen[Candidate | None]):
             yield Label("Version")
             yield Input(id="cand-version")
             yield Label("Adapter")
-            yield Select([(a, a) for a in ADAPTER_KINDS], value=ADAPTER_KINDS[0],
+            yield Select([(str(a), a) for a in AdapterKind], value=AdapterKind.AUTOMATED,
                          allow_blank=False, id="cand-adapter")
             yield Label("Settings (YAML mapping, blank for none)")
             yield TextArea(id="cand-settings")
@@ -67,7 +67,7 @@ class NewCandidateScreen(ModalScreen[Candidate | None]):
             created = self.workspace.create_candidate(
                 tool=self.query_one("#cand-tool", Input).value.strip(),
                 version=self.query_one("#cand-version", Input).value.strip(),
-                adapter=str(self.query_one("#cand-adapter", Select).value),
+                adapter=self.query_one("#cand-adapter", Select).value,
                 settings=parse_settings(self.query_one("#cand-settings", TextArea).text),
                 env_vars=parse_names(self.query_one("#cand-env-vars", Input).value),
                 cost_per_task_usd=parse_cost(self.query_one("#cand-cost", Input).value),

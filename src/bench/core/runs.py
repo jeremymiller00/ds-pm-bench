@@ -449,7 +449,7 @@ def _candidate_snapshot(c: Candidate) -> dict[str, Any]:
         "id": c.id,
         "tool": c.tool,
         "version": c.version,
-        "adapter": c.adapter,
+        "adapter": str(c.adapter),
         "settings": c.settings,
     }
     if c.cost_per_task_usd is not None:  # absent from Runs made before it existed

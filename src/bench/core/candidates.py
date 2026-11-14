@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import datetime
 import re
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -22,19 +23,35 @@ from bench.core.kinds import AdapterKind, Clearance
 
 CANDIDATES_FOLDER = "candidates"
 
-ADAPTER_KINDS = ("automated", "manual_assisted")
 GATE_RESULTS = ("pass", "fail")
 
-CANDIDATE_FIELDS = (
-    "tool",
-    "version",
-    "adapter",
-    "settings",
-    "env_vars",
-    "cost_per_task_usd",
-    "baseline",
-    "gate",
+
+
+@dataclass(frozen=True)
+class CandidateField:
+    """One field of a Candidate file: its default when left out, and why
+    update_candidate cannot change it (None when it can)."""
+
+    name: str
+    default: Callable[[], Any] = lambda: None
+    not_editable: str | None = None
+
+
+# The single source for a Candidate's fields, in file order.
+CANDIDATE_SCHEMA = (
+    CandidateField("tool", not_editable="a different tool is a different Candidate; "
+                   "create_candidate it"),
+    CandidateField("version", not_editable="a different version is a different Candidate; "
+                   "create_candidate it"),
+    CandidateField("adapter"),
+    CandidateField("settings", default=dict),
+    CandidateField("env_vars", default=list),
+    CandidateField("cost_per_task_usd"),
+    CandidateField("baseline", default=lambda: False, not_editable="use mark_baseline"),
+    CandidateField("gate", default=list, not_editable="use record_gate"),
 )
+CANDIDATE_FIELDS = tuple(f.name for f in CANDIDATE_SCHEMA)
+EDITABLE_CANDIDATE_FIELDS = tuple(f.name for f in CANDIDATE_SCHEMA if f.not_editable is None)
 # The Gate checklist a reviewer fills in for each review (ADR-0003, the review record);
 # a passing review also grants a Clearance (ADR-0006).
 GATE_CHECKLIST = ("retention", "sso", "enterprise_terms", "connector_support")
@@ -80,7 +97,7 @@ class Candidate:
     id: str  # the file stem, <tool>@<version>
     tool: str
     version: str
-    adapter: str  # "automated" or "manual_assisted"
+    adapter: AdapterKind
     settings: dict[str, Any]
     env_vars: tuple[str, ...]
     baseline: bool
@@ -162,23 +179,37 @@ def write_candidate(root: Path, candidate_id: str, data: dict[str, Any]) -> Cand
     return candidate
 
 
+def edit_refusal(field_name: str) -> str | None:
+    """Why update_candidate cannot change the field; None when it can."""
+    for f in CANDIDATE_SCHEMA:
+        if f.name == field_name:
+            return f.not_editable
+    return f"unknown, expected one of {', '.join(EDITABLE_CANDIDATE_FIELDS)}"
+
+
+def new_candidate_data(**given: Any) -> dict[str, Any]:
+    """A Candidate's fields as its file holds them, with the defaults for any not given."""
+    return {f.name: given[f.name] if f.name in given else f.default() for f in CANDIDATE_SCHEMA}
+
+
 def candidate_data(c: Candidate) -> dict[str, Any]:
-    """The Candidate as its file holds it."""
-    data: dict[str, Any] = {
-        "tool": c.tool,
-        "version": c.version,
-        "adapter": c.adapter,
-        "settings": c.settings,
-        "env_vars": list(c.env_vars),
-    }
-    if c.cost_per_task_usd is not None:
-        data["cost_per_task_usd"] = c.cost_per_task_usd
-    data["baseline"] = c.baseline
-    data["gate"] = [_review_data(r) for r in c.gate_reviews]
+    """The Candidate as its file holds it; no cost_per_task_usd when it has none."""
+    data = new_candidate_data(
+        tool=c.tool,
+        version=c.version,
+        adapter=str(c.adapter),
+        settings=c.settings,
+        env_vars=list(c.env_vars),
+        cost_per_task_usd=c.cost_per_task_usd,
+        baseline=c.baseline,
+        gate=[review_data(r) for r in c.gate_reviews],
+    )
+    if c.cost_per_task_usd is None:
+        del data["cost_per_task_usd"]
     return data
 
 
-def _review_data(r: GateReview) -> dict[str, Any]:
+def review_data(r: GateReview) -> dict[str, Any]:
     """A Gate review as a Candidate file holds it."""
     return {
         "reviewer": r.reviewer,
@@ -192,27 +223,28 @@ def _review_data(r: GateReview) -> dict[str, Any]:
     }
 
 
-def gate_data(
-    f: FieldReader,
+def new_gate_review(
+    candidate_id: str,
     *,
     reviewer: str,
     on: datetime.date,
     checklist: dict[str, Any],
     passed: bool,
     clearance: Clearance | str | None,
-) -> dict[str, Any]:
-    """A Gate record as a Candidate file holds it; the checklist must hold exactly
-    GATE_CHECKLIST. Field values are checked when the Candidate is parsed."""
+) -> GateReview:
+    """A new Gate review of the Candidate, validated; the checklist must hold exactly
+    GATE_CHECKLIST. ConfigError names the Candidate's file and the field."""
+    f = FieldReader(f"{CANDIDATES_FOLDER}/{candidate_id}.yaml")
     f.exact_keys(f.mapping(checklist, "gate"), "gate", GATE_CHECKLIST)
     if not passed and clearance is not None:
         raise f.fail("gate.clearance", "a failed Gate grants no Clearance; pass None")
-    return {
+    return _review(f, {
         "reviewer": reviewer,
-        "date": on.isoformat(),
+        "date": on,
         **{item: checklist[item] for item in GATE_CHECKLIST},
         "result": "pass" if f.boolean(passed, "gate.result") else "fail",
-        "clearance": None if clearance is None else str(clearance),
-    }
+        "clearance": clearance,
+    })
 
 
 def _load(root: Path, path: Path) -> Candidate:
@@ -226,11 +258,12 @@ def parse_candidate(f: FieldReader, candidate_id: str, data: dict[str, Any]) -> 
     for key in data:
         if key not in CANDIDATE_FIELDS:
             raise f.fail(str(key), f"unknown, expected one of {', '.join(CANDIDATE_FIELDS)}")
-    adapter = f.choice(data.get("adapter"), "adapter", ADAPTER_KINDS)
-    cost = data.get("cost_per_task_usd")
+    data = {**new_candidate_data(), **data}
+    adapter = f.enum(data["adapter"], "adapter", AdapterKind)
+    cost = data["cost_per_task_usd"]
     if cost is not None:
         cost = f.number(cost, "cost_per_task_usd", minimum=0)
-        if adapter != "manual_assisted":
+        if adapter != AdapterKind.MANUAL_ASSISTED:
             raise f.fail(
                 "cost_per_task_usd",
                 "only a manual_assisted Candidate has a flat per-Task cost; "
@@ -238,13 +271,13 @@ def parse_candidate(f: FieldReader, candidate_id: str, data: dict[str, Any]) -> 
             )
     return Candidate(
         id=candidate_id,
-        tool=f.text(data.get("tool"), "tool"),
-        version=f.text(data.get("version"), "version"),
+        tool=f.text(data["tool"], "tool"),
+        version=f.text(data["version"], "version"),
         adapter=adapter,
-        settings=_settings(f, data.get("settings", {})),
-        env_vars=_env_vars(f, data.get("env_vars", [])),
-        baseline=f.boolean(data.get("baseline", False), "baseline"),
-        gate_reviews=_gate_reviews(f, data.get("gate")),
+        settings=_settings(f, data["settings"]),
+        env_vars=_env_vars(f, data["env_vars"]),
+        baseline=f.boolean(data["baseline"], "baseline"),
+        gate_reviews=_gate_reviews(f, data["gate"]),
         cost_per_task_usd=cost,
     )
 

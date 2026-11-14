@@ -16,8 +16,11 @@ from bench.core.candidates import (
     Candidate,
     candidate_data,
     candidate_id_for,
-    gate_data,
+    edit_refusal,
     load_candidates,
+    new_candidate_data,
+    new_gate_review,
+    review_data,
     write_candidate,
 )
 from bench.core.catalog import CATALOG
@@ -31,7 +34,6 @@ from bench.core.errors import (
     UnknownCandidateError,
     UnknownTaskError,
 )
-from bench.core.fields import FieldReader
 from bench.core.kinds import AdapterKind, Clearance, Suite
 from bench.core.lookup import find_by_id
 from bench.core.manual_time import ManualTimeStopwatch
@@ -63,14 +65,6 @@ from bench.core.tasks import (
     scaffold_task,
 )
 from bench.core.verdicts import Comparison, Verdict, compare, gate_verdict
-
-EDITABLE_CANDIDATE_FIELDS = ("adapter", "settings", "env_vars", "cost_per_task_usd")
-_NOT_EDITABLE = {
-    "tool": "a different tool is a different Candidate; create_candidate it",
-    "version": "a different version is a different Candidate; create_candidate it",
-    "baseline": "use mark_baseline",
-    "gate": "use record_gate",
-}
 
 
 @dataclass
@@ -301,16 +295,15 @@ class Workspace:
             raise CandidateAuthoringError(
                 f"{candidate_id} would be the first Candidate, so it must be the Baseline"
             )
-        data: dict[str, Any] = {
-            "tool": tool,
-            "version": version,
-            "adapter": adapter,
-            "settings": {} if settings is None else dict(settings),
-            "env_vars": list(env_vars),
-            "cost_per_task_usd": cost_per_task_usd,
-            "baseline": baseline,
-            "gate": None,
-        }
+        data = new_candidate_data(
+            tool=tool,
+            version=version,
+            adapter=adapter,
+            settings={} if settings is None else dict(settings),
+            env_vars=list(env_vars),
+            cost_per_task_usd=cost_per_task_usd,
+            baseline=baseline,
+        )
         created = write_candidate(self.root, candidate_id, data)
         if baseline:
             self._unmark_baselines_except(created.id)
@@ -329,7 +322,7 @@ class Workspace:
             raise GateNotPassed(
                 f"Candidate {target.id}'s Gate failed, so it cannot be the Baseline"
             )
-        self._write(target, baseline=True)
+        self._write(target, {"baseline": True})
         self._unmark_baselines_except(target.id)
         self._reload_candidates()
         return self.candidate(candidate_id)
@@ -337,7 +330,7 @@ class Workspace:
     def _unmark_baselines_except(self, candidate_id: str) -> None:
         for other in self.candidates:
             if other.baseline and other.id != candidate_id:
-                self._write(other, baseline=False)
+                self._write(other, {"baseline": False})
 
     def record_gate(
         self,
@@ -363,13 +356,12 @@ class Workspace:
         """
         candidate = self.candidate(candidate_id)
         was_failed = candidate.gate is not None and not candidate.gate.passed
-        f = FieldReader(f"{CANDIDATES_FOLDER}/{candidate.id}.yaml")
-        review = gate_data(
-            f, reviewer=reviewer, on=on, checklist=checklist, passed=passed,
+        review = new_gate_review(
+            candidate.id, reviewer=reviewer, on=on, checklist=checklist, passed=passed,
             clearance=clearance,
         )
-        reviews = candidate_data(candidate)["gate"]
-        self._write(candidate, gate=[*reviews, review])
+        self._write(candidate, {"gate": [review_data(r) for r in (*candidate.gate_reviews,
+                                                                  review)]})
         self._reload_candidates()
         if passed or was_failed:
             return None
@@ -389,10 +381,9 @@ class Workspace:
         CandidateAuthoringError; invalid values raise ConfigError. Nothing is written.
         """
         for field_name in changes:
-            if field_name not in EDITABLE_CANDIDATE_FIELDS:
-                raise CandidateAuthoringError(
-                    f"cannot change {field_name}: {_NOT_EDITABLE.get(field_name, 'unknown')}"
-                )
+            refusal = edit_refusal(field_name)
+            if refusal is not None:
+                raise CandidateAuthoringError(f"cannot change {field_name}: {refusal}")
         candidate = self._changeable(candidate_id)
         if "env_vars" in changes:
             changes["env_vars"] = list(changes["env_vars"])
@@ -425,21 +416,22 @@ class Workspace:
         """Write the change in place, or as the next Candidate in its Lineage if a Run
         used it."""
         if candidate.id not in candidate_ids_used(self.root):
-            changed = self._write(candidate, **changes)
+            changed = self._write(candidate, changes)
         else:
             next_id = f"{candidate.lineage}~{candidate.lineage_position + 1}"
-            data = candidate_data(candidate)
-            data.update(changes)
-            changed = write_candidate(self.root, next_id, data)
+            changed = self._write(candidate, changes, as_id=next_id)
             if changed.baseline:
                 self._unmark_baselines_except(changed.id)
         self._reload_candidates()
         return self.candidate(changed.id)
 
-    def _write(self, candidate: Candidate, **changes: Any) -> Candidate:
-        data = candidate_data(candidate)
-        data.update(changes)
-        return write_candidate(self.root, candidate.id, data)
+    def _write(
+        self, candidate: Candidate, changes: dict[str, Any], *, as_id: str | None = None
+    ) -> Candidate:
+        """Write the Candidate with the changes to its own file, or to as_id's."""
+        return write_candidate(
+            self.root, as_id or candidate.id, {**candidate_data(candidate), **changes}
+        )
 
     def _reload_candidates(self) -> None:
         self.candidates = load_candidates(self.root)
