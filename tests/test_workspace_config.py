@@ -262,3 +262,17 @@ def test_invalid_local_config_fails_naming_the_field(
         Workspace.open(workspace_dir)
 
     assert (err.value.file, err.value.field) == ("config/local.yaml", field)
+
+
+@pytest.mark.parametrize("inside", [".", "private", "tasks/private"])
+def test_a_private_root_inside_the_public_workspace_is_refused(
+    workspace_dir: Path, inside: str
+):
+    (workspace_dir / inside).mkdir(parents=True, exist_ok=True)
+    set_local(workspace_dir, f"private_roots: ['{inside}']\n")
+
+    with pytest.raises(ConfigError) as err:
+        Workspace.open(workspace_dir)
+
+    assert (err.value.file, err.value.field) == ("config/local.yaml", "private_roots[0]")
+    assert "inside the public Workspace" in err.value.message

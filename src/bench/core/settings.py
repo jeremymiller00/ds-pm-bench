@@ -119,6 +119,12 @@ def _private_roots(f: FieldReader, root: Path, value: Any) -> tuple[Path, ...]:
         path = (root / Path(entry).expanduser()).resolve()
         if not path.is_dir():
             raise f.fail(field, f"directory {path} does not exist")
+        if path.is_relative_to(root.resolve()):
+            raise f.fail(
+                field,
+                f"{path} is inside the public Workspace root {root.resolve()}; a private "
+                "root must be a separate repo outside it (ADR-0006)",
+            )
         roots.append(path)
     return tuple(roots)
 
