@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from bench.core.candidates import Candidate, load_candidates
+from bench.core.catalog import CATALOG
 from bench.core.decisions import log_verdict, read_log
 from bench.core.errors import TaskNotRunnable, UnknownCandidateError, UnknownTaskError
 from bench.core.kinds import Suite, Visibility
@@ -28,7 +29,14 @@ from bench.core.runs import (
 )
 from bench.core.scoring import RunScore, score_run
 from bench.core.settings import Settings, load_settings
-from bench.core.tasks import CriterionSpec, Task, edit_task, load_tasks, scaffold_task
+from bench.core.tasks import (
+    PRIVATE_TASK_FOLDER,
+    CriterionSpec,
+    Task,
+    edit_task,
+    load_tasks,
+    scaffold_task,
+)
 from bench.core.verdicts import Comparison, Verdict, compare, gate_verdict
 
 
@@ -125,6 +133,29 @@ class Workspace:
         )
         self._reload_tasks()
         return edited
+
+    def scaffold_catalog(self, private_root: str | Path) -> tuple[Task, ...]:
+        """Create the 12 catalog Tasks as Private Tasks in a configured private root.
+
+        Each gets its Track, Trap and task-specific Criteria, with a placeholder
+        input, Gold Answer, Manual Time and Canonical Prompt. Refuses, writing
+        nothing, if any catalog Task already exists.
+        """
+        root = self._private_root(private_root)
+        clashes = [
+            entry.id
+            for entry in CATALOG
+            if find_by_id(self.tasks, entry.id) is not None
+            or (root / PRIVATE_TASK_FOLDER / entry.id).exists()
+        ]
+        if clashes:
+            raise ValueError(
+                f"catalog Tasks already exist, not overwriting: {', '.join(clashes)}"
+            )
+        return tuple(
+            self.create_task(entry.id, private_root=root, **entry.create_args())
+            for entry in CATALOG
+        )
 
     def _private_root(self, path: str | Path) -> Path:
         resolved = (self.root / Path(path).expanduser()).resolve()

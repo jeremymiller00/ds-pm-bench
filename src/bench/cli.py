@@ -8,6 +8,7 @@
   bench score RUN_ID                                 print a Run's scores
   bench verdict CHALLENGER_RUN BASELINE_RUN [...]    compare two Runs, print the Verdict
   bench verdict --gate CANDIDATE [...]               the Verdict for a failed Gate
+  bench scaffold-catalog --root PRIVATE_ROOT         create the 12 catalog Tasks there
 
 A results directory holds one <task id>.yaml per Task, with raw, final,
 active_seconds, latency_seconds, cost_usd and (optionally) criterion_scores.
@@ -121,6 +122,14 @@ def _verdict(ws: Workspace, args: argparse.Namespace) -> int:
     return 0
 
 
+def _scaffold_catalog(ws: Workspace, args: argparse.Namespace) -> int:
+    tasks = ws.scaffold_catalog(args.root)
+    for task in tasks:
+        print(f"created {task.id} ({task.track}) in {task.folder}")
+    print(f"created {len(tasks)} Private Tasks; placeholders: {', '.join(tasks[0].placeholders)}")
+    return 0
+
+
 def _print_verdict(verdict: Verdict) -> None:
     print(f"Verdict: {verdict.label}")
     print(f"  {verdict.candidate_id} vs Baseline {verdict.baseline_id}")
@@ -193,4 +202,16 @@ def _parser() -> argparse.ArgumentParser:
     verdict.add_argument("--on", type=_date, help="the Decision Log date (default: today)")
     verdict.add_argument("--judge-setup-hash", help="Judge setup recorded with the entry")
     verdict.set_defaults(command=_verdict)
+
+    catalog = commands.add_parser(
+        "scaffold-catalog",
+        help="create the 12 catalog Tasks as Private Tasks with placeholders",
+    )
+    catalog.add_argument(
+        "--root",
+        required=True,
+        metavar="PRIVATE_ROOT",
+        help="a private root listed in config/local.yaml",
+    )
+    catalog.set_defaults(command=_scaffold_catalog)
     return parser
