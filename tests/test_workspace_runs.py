@@ -388,6 +388,15 @@ def test_resuming_an_unknown_run_fails(ws_dir: Path):
         Workspace.open(ws_dir).resume_run("2026-01-01-nope@1")
 
 
+def test_run_ids_lists_every_run_newest_first(ws_dir: Path):
+    ws = Workspace.open(ws_dir)
+    assert ws.run_ids() == ()
+    ws.start_run("claude@opus-5-5", on=datetime.date(2026, 11, 1))
+    ws.start_run("claude@opus-5-5", on=DAY)
+
+    assert ws.run_ids() == ("2026-11-13-claude@opus-5-5", "2026-11-01-claude@opus-5-5")
+
+
 def test_a_tasks_output_is_recorded_once(ws_dir: Path):
     run = Workspace.open(ws_dir).start_run("claude@opus-5-5", on=DAY)
     record(run, "T1.1")

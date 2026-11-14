@@ -24,6 +24,7 @@ from bench.core.errors import (
     SuiteUnavailable,
     UnknownRunError,
 )
+from bench.core.kinds import Clearance, Suite
 from bench.core.runs import OutputRecord, Run
 from bench.core.sessions import ManualSession
 from bench.core.workspace import Workspace
@@ -42,8 +43,8 @@ RUN_ERRORS = (
 
 class RunsPane(Vertical):
     DEFAULT_CSS = """
-    RunsPane #run-controls { height: auto; }
-    RunsPane #run-controls Select { width: 1fr; }
+    RunsPane #run-controls, RunsPane #run-resume-controls { height: auto; }
+    RunsPane Select { width: 1fr; }
     RunsPane #run-tasks { height: auto; max-height: 12; }
     RunsPane #run-status { height: auto; padding: 0 1; }
     """
@@ -57,11 +58,35 @@ class RunsPane(Vertical):
         candidates = [(c.id, c.id) for c in self.workspace.candidates]
         with Horizontal(id="run-controls"):
             yield Select(candidates, prompt="Candidate", id="run-candidate")
+            yield Select(
+                [(str(suite), str(suite)) for suite in Suite],
+                prompt="Suite",
+                id="run-suite",
+                disabled=True,
+            )
             yield Button("Start Run", id="run-start", variant="primary")
+        with Horizontal(id="run-resume-controls"):
+            yield Select(
+                [(run_id, run_id) for run_id in self.workspace.run_ids()],
+                prompt="Run to resume",
+                id="run-existing",
+            )
+            yield Button("Resume Run", id="run-resume")
         yield Static("No Run open.", id="run-progress", markup=False)
         yield Label("Pending Tasks (enter to work one)")
         yield OptionList(id="run-tasks")
         yield Static("", id="run-status", markup=False)
+
+    @on(Select.Changed, "#run-candidate")
+    def _offer_suites(self, event: Select.Changed) -> None:
+        """A Suite can be chosen only when the Clearance allows more than public."""
+        suite = self.query_one("#run-suite", Select)
+        if event.value is Select.BLANK:
+            suite.disabled = True
+            return
+        clearance = self.workspace.candidate(str(event.value)).clearance
+        suite.disabled = clearance != Clearance.PUBLIC_AND_PRIVATE
+        suite.value = str(clearance or Suite.PUBLIC_ONLY)
 
     @on(Button.Pressed, "#run-start")
     def _start(self) -> None:
@@ -69,13 +94,33 @@ class RunsPane(Vertical):
         if candidate_id is Select.BLANK:
             self._status("Choose a Candidate to start a Run.")
             return
+        suite = self.query_one("#run-suite", Select)
         try:
-            run = self.workspace.start_run(str(candidate_id))
+            run = self.workspace.start_run(
+                str(candidate_id),
+                suite=None if suite.disabled else str(suite.value),
+            )
         except RUN_ERRORS as exc:
             self._status(str(exc))
             return
         self._open(run)
+        existing = self.query_one("#run-existing", Select)
+        existing.set_options([(run_id, run_id) for run_id in self.workspace.run_ids()])
         self._status(f"Started Run {run.id}.")
+
+    @on(Button.Pressed, "#run-resume")
+    def _resume(self) -> None:
+        run_id = self.query_one("#run-existing", Select).value
+        if run_id is Select.BLANK:
+            self._status("Choose a Run to resume.")
+            return
+        try:
+            run = self.workspace.resume_run(str(run_id))
+        except RUN_ERRORS as exc:
+            self._status(str(exc))
+            return
+        self._open(run)
+        self._status(f"Resumed Run {run.id}.")
 
     def _open(self, run: Run) -> None:
         self.run = run

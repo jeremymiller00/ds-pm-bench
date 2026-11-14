@@ -14,6 +14,7 @@ from textual.widgets import OptionList, Select, Static, TextArea
 from bench import Workspace
 from bench.tui.app import BenchApp
 from bench.tui.runs import ManualTaskScreen
+from test_tui import configure_private_root, write_task
 from test_workspace_candidates import candidate, write_candidate
 from test_workspace_manual_session import FakeClock, FakeEditor
 
@@ -181,3 +182,63 @@ async def test_editing_in_editor_suspends_the_app_and_counts_all_its_open_time(
     assert (saved["active_seconds"], saved["latency_seconds"]) == (250, 10)
     final = next((ws_dir / "runs").glob(f"*/final/{EXAMPLE}.md")).read_text()
     assert final == "Predict SMB churn 60 days ahead."
+
+
+async def test_suite_choice_is_offered_only_where_clearance_allows(
+    ws_dir: Path, tmp_path: Path, clock: FakeClock
+):
+    private = tmp_path / "private"
+    configure_private_root(ws_dir, private)
+    write_task(private, "T1.2")
+    write_task(ws_dir, "T2.1", track="Specs", gold="TODO: write the Gold Answer")
+    write_candidate(ws_dir, "claude@opus-5-5", candidate())  # public_and_private
+
+    app = BenchApp(Workspace.open(ws_dir, clock=clock))
+    async with app.run_test() as pilot:
+        await open_runs(app, pilot)
+        suite = app.query_one("#run-suite", Select)
+        app.query_one("#run-candidate", Select).value = CANDIDATE
+        await pilot.pause()
+        assert suite.disabled and suite.value == "public_only"
+
+        app.query_one("#run-candidate", Select).value = "claude@opus-5-5"
+        await pilot.pause()
+        assert not suite.disabled and suite.value == "public_and_private"
+        suite.value = "public_only"
+        await pilot.click("#run-start")
+        await pilot.pause()
+        progress = text(app, "#run-progress")
+        pending = app.query_one("#run-tasks", OptionList)
+        pending_ids = [pending.get_option_at_index(i).id for i in range(pending.option_count)]
+
+    assert "(public_only): 0/1 Tasks recorded" in progress
+    assert "T2.1: Gold Answer" in progress  # excluded as a placeholder
+    assert pending_ids == [EXAMPLE]
+
+
+async def test_a_half_finished_run_resumes_with_its_progress(
+    ws_dir: Path, clock: FakeClock
+):
+    write_task(ws_dir, "T2.1", track="Specs")
+    app = BenchApp(Workspace.open(ws_dir, clock=clock))
+    async with app.run_test() as pilot:
+        await start_run(app, pilot)
+        await open_task(app, pilot, "T2.1")
+        await paste_raw(app, pilot, "A spec.")
+        await pilot.press("ctrl+s")
+        await pilot.pause()
+        (run_id,) = Workspace.open(ws_dir).run_ids()
+
+    app = BenchApp(Workspace.open(ws_dir, clock=clock))
+    async with app.run_test() as pilot:
+        await open_runs(app, pilot)
+        app.query_one("#run-existing", Select).value = run_id
+        await pilot.pause()
+        await pilot.click("#run-resume")
+        await pilot.pause()
+        progress = text(app, "#run-progress")
+        pending = app.query_one("#run-tasks", OptionList)
+        pending_ids = [pending.get_option_at_index(i).id for i in range(pending.option_count)]
+
+    assert f"Run {run_id} (public_only): 1/2 Tasks recorded" in progress
+    assert pending_ids == [EXAMPLE]

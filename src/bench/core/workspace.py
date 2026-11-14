@@ -30,6 +30,7 @@ from bench.core.runs import (
     check_gate,
     choose_suite,
     create_run,
+    list_run_ids,
     open_run,
     task_versions_used,
     tasks_in,
@@ -280,6 +281,10 @@ class Workspace:
         if task_id not in run.pending:
             raise ValueError(f"Run {run.id}: Task {task_id}'s Output is already recorded")
         return ManualSession(run, task_id, prompt, self.clock, self.editor)
+
+    def run_ids(self) -> tuple[str, ...]:
+        """The id of every Run under runs/, newest first, for choosing one to resume."""
+        return list_run_ids(self.root)
 
     def resume_run(self, run_id: str) -> Run:
         """Reopen a Run, such as one left half-finished; see Run.pending.

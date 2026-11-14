@@ -440,6 +440,12 @@ def _candidate_snapshot(c: Candidate) -> dict[str, Any]:
     }
 
 
+def list_run_ids(workspace_root: Path) -> tuple[str, ...]:
+    """Every Run id under runs/, newest first (ids start with the Run's date)."""
+    paths = (workspace_root / RUNS_FOLDER).glob(f"*/{RUN_FILE}")
+    return tuple(sorted((p.parent.name for p in paths), reverse=True))
+
+
 def task_versions_used(workspace_root: Path) -> set[tuple[str, int]]:
     """Every (Task id, version) some Run's snapshot holds; frozen per ADR-0003."""
     used: set[tuple[str, int]] = set()
