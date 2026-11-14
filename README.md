@@ -27,6 +27,17 @@ which is git-ignored because the paths are machine-specific. Copy
 `config/local.example.yaml` to start; without it no Private Tasks load.
 `private_roots` in the public `config/settings.yaml` is refused.
 
+To start the 12 catalog Tasks (T1.1-T4.3) as Private Tasks in one of those roots:
+
+```sh
+bench scaffold-catalog --root ../ds-pm-bench-private
+```
+
+Each gets its Track, Trap and one or two task-specific Criteria; the input, Gold
+Answer, Manual Time and Canonical Prompt start as placeholders (`TODO`), so the
+harness will not Run a Task until all four are filled in. It refuses, writing
+nothing, if any catalog Task already exists.
+
 ### 1. Record a Run from results files
 
 A results folder holds one `<task id>.yaml` per Task in the Suite (an unknown key
