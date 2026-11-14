@@ -386,8 +386,8 @@ EDIT_HELP = (
 
 
 def run_progress(run: Run) -> str:
-    done = len(run.tasks) - len(run.pending)
-    lines = [f"Run {run.id} ({run.suite}): {done}/{len(run.tasks)} Tasks recorded"]
+    done, total = run.progress
+    lines = [f"Run {run.id} ({run.suite}): {done}/{total} Tasks recorded"]
     if run.excluded:
         lines.append("Excluded, still a placeholder:")
         lines += [f"  {task_id}: {', '.join(what)}" for task_id, what in run.excluded.items()]

@@ -339,3 +339,16 @@ def test_a_run_of_an_automated_candidate_cannot_be_worked_by_hand(
 
     with pytest.raises(AttemptError, match="manual_assisted"):
         ws.begin_manual_task(run, "T1.1")
+
+
+def test_a_runs_progress_counts_the_tasks_recorded(ws_dir: Path, clock: FakeClock):
+    write_task(ws_dir, "T2.1", track="Specs")
+    ws = open_ws(ws_dir, clock)
+    run = ws.start_run(CANDIDATE, on=DAY)
+    assert run.progress == (0, 2)
+
+    attempt = ws.begin_manual_task(run, "T1.1")
+    attempt.submit_raw("raw")
+    attempt.finish()
+
+    assert run.progress == (1, 2)

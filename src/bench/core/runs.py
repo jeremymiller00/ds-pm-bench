@@ -245,6 +245,11 @@ class Run:
         )
 
     @property
+    def progress(self) -> tuple[int, int]:
+        """(Tasks whose Output is recorded, Tasks in the Suite)."""
+        return len(self.tasks) - len(self.pending), len(self.tasks)
+
+    @property
     def pending(self) -> tuple[str, ...]:
         """Task ids in the Suite whose Output is not recorded yet, in Suite order."""
         return tuple(t.id for t in self.tasks if self._task_record(t.id) is None)
