@@ -155,3 +155,12 @@ class CandidateUnavailable(Exception):
 class MissingSecret(Exception):
     """A secret a Candidate needs is set neither in the environment nor in .env.
     Names the environment variable, never a value (ADR-0005)."""
+
+
+# Every refusal Workspace.compare can raise: an unknown or changed Run (LookupError,
+# RunMismatch), one not the Baseline's (ValueError), a Gate or Clearance no longer
+# held, an incomplete Run, different Suites, or Spot-checks left.
+COMPARISON_REFUSALS: tuple[type[Exception], ...] = (
+    ValueError, LookupError, GateNotPassed, ClearanceError, RunMismatch, RunIncomplete,
+    SuiteMismatch, SpotChecksUnfinished,
+)

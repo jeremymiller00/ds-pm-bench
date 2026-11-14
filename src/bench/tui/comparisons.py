@@ -2,12 +2,15 @@
 
 Comparisons: choose a challenger Run and a Baseline Run; the Workspace compares them
 and this module shows the scorecard and its Verdict, which one key logs to the Decision
-Log. Decision Log: browse every entry, newest first, and reopen the Comparison behind a
-Verdict. Every rule lives in the Workspace; this module only shows what it reports.
+Log with that scorecard. Decision Log: browse every entry, newest first, and open a
+Verdict's scorecard as it was logged; recomputing it from the Runs as they are now is a
+separate, labelled action. Every rule lives in the Workspace; this module only shows
+what it reports.
 """
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Any
 
 import yaml
@@ -19,8 +22,10 @@ from textual.screen import Screen
 from textual.widgets import Button, Footer, Label, OptionList, Select, Static
 from textual.widgets.option_list import Option
 
-from bench.core.settings import DIMENSIONS
-from bench.core.verdicts import Comparison
+from bench.core.decisions import entry_kind, logged_scorecard
+from bench.core.errors import COMPARISON_REFUSALS
+from bench.core.kinds import EntryKind
+from bench.core.verdicts import Comparison, Scorecard, ScoreRow, Verdict, verdict_from_entry
 from bench.core.workspace import Workspace
 
 
@@ -74,13 +79,11 @@ class ComparisonsPane(Vertical):
         self.query_one("#cmp-scorecard", Static).update("")
         try:
             comparison = self.workspace.compare(str(challenger), str(baseline))
-        except Exception as exc:  # any refusal, whatever its kind, is shown inline
+        except COMPARISON_REFUSALS as exc:
             self._status(f"Not compared: {exc}")
             return
         self.comparison = comparison
-        self.query_one("#cmp-scorecard", Static).update(
-            scorecard(comparison, self.workspace.settings.weights)
-        )
+        self.query_one("#cmp-scorecard", Static).update(comparison_text(comparison))
         self.query_one("#cmp-log", Button).disabled = False
         self._status("l logs this Verdict to the Decision Log.")
 
@@ -93,9 +96,7 @@ class ComparisonsPane(Vertical):
         if self.logged:
             self._status("This Verdict is already logged; compare again to log another.")
             return
-        path = self.workspace.log_verdict(
-            comparison.verdict, judge_setup_hash=comparison.judge_setup_hash
-        )
+        path = self.workspace.log_comparison(comparison)
         self.logged = True
         self.query_one("#cmp-log", Button).disabled = True
         self._status(f"Logged: {path.relative_to(self.workspace.root)}")
@@ -116,7 +117,7 @@ class DecisionLogPane(Vertical):
         self.entries: tuple[dict[str, Any], ...] = ()
 
     def compose(self) -> ComposeResult:
-        yield Label("Decision Log, newest first (enter on a Verdict opens its Comparison)")
+        yield Label("Decision Log, newest first (enter on a Verdict opens its scorecard)")
         yield OptionList(id="log-entries")
         yield Static("", id="log-status", markup=False)
         with VerticalScroll():
@@ -151,71 +152,94 @@ class DecisionLogPane(Vertical):
         entry = self._entry(event.option)
         if entry is None:
             return
-        if entry.get("kind") != "verdict":
+        if entry_kind(entry) != EntryKind.VERDICT:
             self._status("Only a Verdict has a Comparison behind it.")
             return
         runs = entry.get("runs") or {}
         if not (runs.get("challenger") and runs.get("baseline")):
             self._status("No Comparison: this Verdict needed no Runs.")
             return
-        try:
-            comparison = self.workspace.compare(runs["challenger"], runs["baseline"])
-        except Exception as exc:  # any refusal, whatever its kind, is shown inline
-            self._status(f"The Comparison cannot be reopened: {exc}")
-            return
         self._status("")
-        weights = self.workspace.settings.weights
-        self.app.push_screen(ComparisonScreen(comparison, weights, logged=entry.get("label")))
+        self.app.push_screen(ComparisonScreen(self.workspace, entry))
 
     def _status(self, message: str) -> None:
         self.query_one("#log-status", Static).update(message)
 
 
 class ComparisonScreen(Screen[None]):
-    """The Comparison behind a logged Verdict, recomputed from its Runs; escape goes back."""
+    """A logged Verdict's scorecard exactly as it was logged. r recomputes the Comparison
+    from its Runs as they are now, shown apart and labelled; escape goes back."""
 
     DEFAULT_CSS = "ComparisonScreen Static { height: auto; padding: 0 1; }"
-    BINDINGS = [Binding("escape", "leave", "Back to the Decision Log")]
+    BINDINGS = [
+        Binding("r", "recompute", "Recompute from the Runs as they are now"),
+        Binding("escape", "leave", "Back to the Decision Log"),
+    ]
 
-    def __init__(
-        self, comparison: Comparison, weights: dict[str, float], *, logged: str | None
-    ) -> None:
+    def __init__(self, workspace: Workspace, entry: dict[str, Any]) -> None:
         super().__init__()
-        self.comparison = comparison
-        self.weights = weights
-        self.logged = logged
+        self.workspace = workspace
+        self.entry = entry
 
     def compose(self) -> ComposeResult:
-        verdict = self.comparison.verdict
-        note = f"Logged Verdict: {self.logged}. Recomputed from the Runs as they are now."
-        if self.logged != verdict.label:
-            note += f" It now reads {verdict.label}, as the Runs changed since it was logged."
+        verdict = verdict_from_entry(self.entry)
+        card = logged_scorecard(self.entry)
+        date = self.entry.get("date", "?")
+        if card is None:
+            note = (f"Logged {date}: Verdict {verdict.label}. This entry was logged "
+                    "without a scorecard; r recomputes it from the Runs.")
+            shown = verdict_text(verdict)
+        else:
+            note = f"As logged {date}. r recomputes it from the Runs as they are now."
+            shown = scorecard_text(verdict, card, self.entry.get("judge_setup_hash"))
         with VerticalScroll():
             yield Static(note, id="comparison-note", markup=False)
-            yield Static(
-                scorecard(self.comparison, self.weights), id="comparison-scorecard",
-                markup=False,
-            )
+            yield Static(shown, id="comparison-scorecard", markup=False)
+            yield Static("", id="comparison-recomputed", markup=False)
         yield Footer()
+
+    def action_recompute(self) -> None:
+        runs = self.entry["runs"]
+        try:
+            comparison = self.workspace.compare(runs["challenger"], runs["baseline"])
+        except COMPARISON_REFUSALS as exc:
+            shown = f"Recomputed from the Runs as they are now: not comparable: {exc}"
+        else:
+            shown = "Recomputed from the Runs as they are now:\n\n" + comparison_text(comparison)
+        self.query_one("#comparison-recomputed", Static).update(shown)
 
     def action_leave(self) -> None:
         self.dismiss(None)
 
 
-def entry_label(entry: dict[str, Any]) -> str:
-    date, kind = entry.get("date", "?"), entry.get("kind", "?")
+def _verdict_label(entry: dict[str, Any]) -> str:
     candidate = (entry.get("candidate") or {}).get("id", "?")
-    if kind == "verdict":
-        baseline = (entry.get("baseline") or {}).get("id", "?")
-        return f"{date}  Verdict {entry.get('label')}: {candidate} vs Baseline {baseline}"
-    if kind == "uncertified_judge_override":
-        return f"{date}  uncertified Judge override: Run {entry.get('run')}"
-    if kind == "judge_certification":
-        return (
-            f"{date}  Judge Setup {entry.get('judge_setup_hash')} certified: "
-            f"{agreement_text(entry.get('within_one_point'), entry.get('weighted_kappa'))}"
-        )
-    return f"{date}  {kind.replace('_', ' ')}: {candidate}"
+    baseline = (entry.get("baseline") or {}).get("id", "?")
+    return f"Verdict {entry.get('label')}: {candidate} vs Baseline {baseline}"
+
+
+def _override_label(entry: dict[str, Any]) -> str:
+    return f"uncertified Judge override: Run {entry.get('run')}"
+
+
+def _certification_label(entry: dict[str, Any]) -> str:
+    agreement = agreement_text(entry.get("within_one_point"), entry.get("weighted_kappa"))
+    return f"Judge Setup {entry.get('judge_setup_hash')} certified: {agreement}"
+
+
+# How each kind of Decision Log entry is labelled in the list.
+ENTRY_LABELS: dict[EntryKind, Callable[[dict[str, Any]], str]] = {
+    EntryKind.VERDICT: _verdict_label,
+    EntryKind.UNCERTIFIED_JUDGE_OVERRIDE: _override_label,
+    EntryKind.JUDGE_CERTIFICATION: _certification_label,
+}
+
+
+def entry_label(entry: dict[str, Any]) -> str:
+    date, kind = entry.get("date", "?"), entry_kind(entry)
+    if kind is None:
+        return f"{date}  {entry.get('kind', '?')}"
+    return f"{date}  {ENTRY_LABELS[kind](entry)}"
 
 
 def agreement_text(within_one_point: float | None, weighted_kappa: float | None) -> str:
@@ -224,31 +248,37 @@ def agreement_text(within_one_point: float | None, weighted_kappa: float | None)
     return f"{within} within 1 point, weighted kappa {kappa}"
 
 
-def scorecard(comparison: Comparison, weights: dict[str, float]) -> str:
-    verdict = comparison.verdict
-    c, b = comparison.challenger_score, comparison.baseline_score
-    judge = comparison.judge_setup_hash or "differs between the Runs, or unknown"
+def comparison_text(comparison: Comparison) -> str:
+    return scorecard_text(comparison.verdict, comparison.scorecard, comparison.judge_setup_hash)
+
+
+def verdict_text(verdict: Verdict) -> str:
     lines = [f"Verdict: {verdict.label}"]
     lines += [f"  - {reason}" for reason in verdict.rationale]
-    lines += [
+    return "\n".join(lines)
+
+
+def scorecard_text(verdict: Verdict, card: Scorecard, judge_setup_hash: str | None) -> str:
+    judge = judge_setup_hash or "differs between the Runs, or unknown"
+    lines = [
+        verdict_text(verdict),
         "",
-        f"{verdict.candidate_id} (Run {comparison.challenger.id}) vs Baseline "
-        f"{verdict.baseline_id} (Run {comparison.baseline.id})",
+        f"{verdict.candidate_id} (Run {verdict.challenger_run_id}) vs Baseline "
+        f"{verdict.baseline_id} (Run {verdict.baseline_run_id})",
         f"Suite: {verdict.suite}, {verdict.private_tasks} Private Tasks; "
         f"full adopt: {'yes' if verdict.full_adopt else 'no'}",
         f"Judge Setup: {judge}",
+        f"Margins: regression {card.regression_margin:g}, re-test {card.retest_margin:g}",
         "",
         f"{'Dimension':<20}{'weight':>8}{'challenger':>12}{'Baseline':>10}{'delta':>8}",
     ]
-    lines += [
-        row(d, f"{weights[d]:g}%", c.dimensions[d], b.dimensions[d]) for d in DIMENSIONS
-    ]
-    lines += [row("Weighted", "", c.weighted, b.weighted), "", "Track quality"]
-    for track, baseline_quality in b.track_quality.items():
+    lines += [row(d, f"{card.weights[d]:g}%", r) for d, r in card.dimensions.items()]
+    lines += [row("Weighted", "", card.weighted), "", "Track quality"]
+    for track, r in card.track_quality.items():
         flag = "  Regression" if track in verdict.regressions else ""
-        challenger_quality = c.track_quality.get(track, baseline_quality)
-        lines.append(row(track, "", challenger_quality, baseline_quality) + flag)
-    notes = [f"challenger: {n}" for n in c.notes] + [f"Baseline: {n}" for n in b.notes]
+        lines.append(row(track, "", r) + flag)
+    notes = ([f"challenger: {n}" for n in card.challenger_notes]
+             + [f"Baseline: {n}" for n in card.baseline_notes])
     if notes:
         lines += ["", "Notes"] + [f"  {n}" for n in notes]
     if verdict.warnings:
@@ -256,6 +286,5 @@ def scorecard(comparison: Comparison, weights: dict[str, float]) -> str:
     return "\n".join(lines)
 
 
-def row(name: str, weight: str, challenger: float, baseline: float) -> str:
-    delta = challenger - baseline
-    return f"{name:<20}{weight:>8}{challenger:>12.2f}{baseline:>10.2f}{delta:>+8.2f}"
+def row(name: str, weight: str, r: ScoreRow) -> str:
+    return f"{name:<20}{weight:>8}{r.challenger:>12.2f}{r.baseline:>10.2f}{r.delta:>+8.2f}"

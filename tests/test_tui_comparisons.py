@@ -12,11 +12,11 @@ from textual.widgets import OptionList, Select, Static
 
 from bench import Workspace
 from bench.cli import main
-from bench.core.decisions import log_override
 from bench.tui.app import BenchApp
 from bench.tui.comparisons import ComparisonScreen
 from test_cli import BASELINE, GOLDEN, golden_workspace
 from test_workspace_attempts import FakeClock
+from test_workspace_judging import FakeJudges
 
 CHALLENGER = "other@1"
 DAY = "2026-11-13"
@@ -82,6 +82,7 @@ async def test_two_fixture_runs_reach_a_logged_verdict_and_browse_back_to_it(tmp
         await pilot.pause()
         assert isinstance(app.screen, ComparisonScreen)
         assert "Verdict: adopt" in text(app, "#comparison-scorecard")
+        assert "4.30" in text(app, "#comparison-scorecard")
         await pilot.press("escape")
         await pilot.pause()
         assert not isinstance(app.screen, ComparisonScreen)
@@ -153,11 +154,50 @@ async def test_a_spot_check_re_test_shows_its_reason(tmp_path: Path):
     assert "Judge and human differ by 1.5 points on T1.1-example clarity" in card
 
 
+async def test_the_decision_log_shows_the_scorecard_as_logged_and_recomputes_apart(
+    tmp_path: Path,
+):
+    ws, challenger, baseline = golden_runs("adopt-public-only", tmp_path)
+    workspace = Workspace.open(ws, clock=FakeClock())
+    workspace.log_comparison(workspace.compare(challenger, baseline))
+    # The Runs change after logging: a Spot-check now forces a re-test.
+    args = ["--workspace", str(ws), "spot-check", challenger, "T1.1-example", "clarity", "1"]
+    assert main(args) == 0
+
+    app = BenchApp(Workspace.open(ws, clock=FakeClock()))
+    async with app.run_test() as pilot:
+        await open_tab(pilot, "decision-log")
+        entries = app.query_one("#log-entries", OptionList)
+        entries.focus()
+        entries.highlighted = 0
+        await pilot.press("enter")
+        await pilot.pause()
+        logged = text(app, "#comparison-scorecard")
+        before = text(app, "#comparison-recomputed")
+        await pilot.press("r")
+        await pilot.pause()
+        recomputed = text(app, "#comparison-recomputed")
+
+    assert logged.splitlines()[0].startswith("Verdict: adopt")
+    assert "4.30" in logged and "+0.50" in logged
+    assert before == ""
+    assert "Recomputed from the Runs as they are now" in recomputed
+    assert "Verdict: re-test" in recomputed
+
+
 async def test_decision_log_lists_every_kind_of_entry_newest_first(tmp_path: Path):
     ws_dir = golden_workspace("reject-by-gate", tmp_path)
-    ws = Workspace.open(ws_dir, clock=FakeClock())
+    results = tmp_path / "unscored"
+    results.mkdir()
+    data = yaml.safe_load(
+        (GOLDEN / "adopt-public-only" / "results" / BASELINE / "T1.1-example.yaml").read_text()
+    )
+    del data["criterion_scores"]
+    (results / "T1.1-example.yaml").write_text(yaml.safe_dump(data))
+    run_id = record_run(ws_dir, results, BASELINE)
+    ws = Workspace.open(ws_dir, clock=FakeClock(), judges=FakeJudges())
     ws.log_verdict(ws.gate_verdict(CHALLENGER))
-    log_override(ws.root, FakeClock().today(), f"{DAY}-{BASELINE}", BASELINE, "abc123")
+    ws.judge_run(ws.resume_run(run_id), allow_uncertified=True)  # logs the override
 
     app = BenchApp(Workspace.open(ws_dir, clock=FakeClock()))
     async with app.run_test() as pilot:
