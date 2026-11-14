@@ -27,7 +27,7 @@ from bench.core.errors import (
     SuiteUnavailable,
     UnknownRunError,
 )
-from bench.core.kinds import Clearance, Suite
+from bench.core.kinds import Suite
 from bench.core.manual_time import ManualTimeStopwatch
 from bench.core.runs import OutputRecord, Run
 from bench.core.tasks import Task
@@ -66,7 +66,7 @@ class RunsPane(Vertical):
         with Horizontal(id="run-controls"):
             yield Select(candidates, prompt="Candidate", id="run-candidate")
             yield Select(
-                [(str(suite), str(suite)) for suite in Suite],
+                [(str(suite), suite) for suite in Suite],
                 prompt="Suite",
                 id="run-suite",
                 disabled=True,
@@ -116,14 +116,16 @@ class RunsPane(Vertical):
 
     @on(Select.Changed, "#run-candidate")
     def _offer_suites(self, event: Select.Changed) -> None:
-        """A Suite can be chosen only when the Clearance allows more than public."""
-        suite = self.query_one("#run-suite", Select)
-        if event.value is Select.BLANK:
-            suite.disabled = True
-            return
-        clearance = self.workspace.candidate(str(event.value)).clearance
-        suite.disabled = clearance != Clearance.PUBLIC_AND_PRIVATE
-        suite.value = str(clearance or Suite.PUBLIC_ONLY)
+        """Offer the Suites the Candidate's Clearance allows; a choice only when there
+        is more than one."""
+        select = self.query_one("#run-suite", Select)
+        suites = () if event.value is Select.BLANK else (
+            self.workspace.suites_for(str(event.value))
+        )
+        select.disabled = len(suites) < 2
+        if suites:
+            select.set_options([(str(s), s) for s in suites])
+            select.value = suites[0]
 
     @on(Button.Pressed, "#run-start")
     def _start(self) -> None:
@@ -135,7 +137,7 @@ class RunsPane(Vertical):
         try:
             run = self.workspace.start_run(
                 str(candidate_id),
-                suite=None if suite.disabled else str(suite.value),
+                suite=None if suite.disabled else suite.value,
             )
         except RUN_ERRORS as exc:
             self._status(str(exc))

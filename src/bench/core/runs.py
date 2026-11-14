@@ -359,6 +359,19 @@ def check_clearance(candidate: Candidate, task: Task) -> None:
         )
 
 
+# The Suites each Clearance allows, the default (all it allows) first (ADR-0006).
+SUITES_FOR_CLEARANCE: Mapping[Clearance, tuple[Suite, ...]] = {
+    Clearance.PUBLIC_ONLY: (Suite.PUBLIC_ONLY,),
+    Clearance.PUBLIC_AND_PRIVATE: (Suite.PUBLIC_AND_PRIVATE, Suite.PUBLIC_ONLY),
+}
+
+
+def suites_for(candidate: Candidate) -> tuple[Suite, ...]:
+    """The Suites a Run of the Candidate may cover, the default first; none without a
+    passing Gate."""
+    return () if candidate.clearance is None else SUITES_FOR_CLEARANCE[candidate.clearance]
+
+
 def choose_suite(
     candidate: Candidate, requested: Suite | str | None, tasks: tuple[Task, ...]
 ) -> Suite:
@@ -368,11 +381,12 @@ def choose_suite(
     cleared Candidate with no Private Tasks loaded is refused rather than silently given
     a public-only Suite; ask for public_only explicitly.
     """
-    cleared = Suite(candidate.clearance)
-    suite = cleared if requested is None else Suite(requested)
-    if suite == Suite.PUBLIC_AND_PRIVATE and cleared != Suite.PUBLIC_AND_PRIVATE:
+    allowed = suites_for(candidate)
+    suite = allowed[0] if requested is None else Suite(requested)
+    if suite not in allowed:
         raise ClearanceError(
-            f"Candidate {candidate.id} is cleared for {cleared}, not a {suite} Suite"
+            f"Candidate {candidate.id} is cleared for {candidate.clearance}, "
+            f"not a {suite} Suite"
         )
     has_private = any(t.visibility == Visibility.PRIVATE for t in tasks)
     if suite == Suite.PUBLIC_AND_PRIVATE and not has_private:

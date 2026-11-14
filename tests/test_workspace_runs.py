@@ -14,6 +14,7 @@ from bench import (
     TaskResult,
     Workspace,
 )
+from bench.core.kinds import Suite
 from test_workspace_candidates import candidate, write_candidate
 from test_workspace_tasks import configure_private_root, write_task
 
@@ -462,3 +463,24 @@ def test_a_results_file_missing_a_measure_fails_naming_the_file_and_field(
     with pytest.raises(ValueError, match="T1.1.yaml.*latency_seconds"):
         run.record_from_file(path)
     assert run.pending == ("T1.1", "T2.1")
+
+
+@pytest.mark.parametrize(
+    "clearance, suites",
+    [
+        ("public_only", (Suite.PUBLIC_ONLY,)),
+        ("public_and_private", (Suite.PUBLIC_AND_PRIVATE, Suite.PUBLIC_ONLY)),
+    ],
+)
+def test_the_suites_a_candidate_may_run_follow_its_clearance_default_first(
+    ws_dir: Path, clearance: str, suites: tuple
+):
+    write_candidate(ws_dir, "other@1", cleared(clearance))
+
+    assert Workspace.open(ws_dir).suites_for("other@1") == suites
+
+
+def test_a_candidate_without_a_passing_gate_may_run_no_suite(ws_dir: Path):
+    write_candidate(ws_dir, "other@1", candidate(gate=None))
+
+    assert Workspace.open(ws_dir).suites_for("other@1") == ()

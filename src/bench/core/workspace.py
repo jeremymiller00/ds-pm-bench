@@ -47,6 +47,7 @@ from bench.core.runs import (
     create_run,
     list_run_ids,
     open_run,
+    suites_for,
     task_versions_used,
     tasks_in,
 )
@@ -442,6 +443,11 @@ class Workspace:
 
     def _reload_candidates(self) -> None:
         self.candidates = load_candidates(self.root)
+
+    def suites_for(self, candidate_id: str) -> tuple[Suite, ...]:
+        """The Suites a Run of the Candidate may cover, its default first: what its
+        Clearance allows, or none without a passing Gate."""
+        return suites_for(self.candidate(candidate_id))
 
     def start_run(
         self,
