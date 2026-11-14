@@ -121,15 +121,15 @@ async def test_shell_opens_on_tasks_with_the_later_sections_as_placeholders(
         tabs = app.query_one(Tabs)
         labels = [str(tab.label) for tab in tabs.query("Tab")]
         assert labels == [
-            "Tasks", "Runs", "Calibration", "Comparisons", "Decision Log", "Settings"
+            "Tasks", "Candidates", "Runs", "Calibration", "Comparisons", "Decision Log", "Settings"
         ]
         sections = app.query_one(TabbedContent)
         assert sections.active == "tasks"
 
-        await pilot.click("#--content-tab-runs")
+        await pilot.click("#--content-tab-calibration")
         await pilot.pause()
-        assert sections.active == "runs"
-        placeholder = sections.query_one("#runs Static", Static)
+        assert sections.active == "calibration"
+        placeholder = sections.query_one("#calibration Static", Static)
         assert "not built yet" in str(placeholder.content)
 
 

@@ -9,8 +9,16 @@ from __future__ import annotations
 from enum import StrEnum
 
 
+class AdapterKind(StrEnum):
+    """How the harness reaches a Candidate: automated (API or CLI), or manual-assisted,
+    where a person pastes the Output back."""
+
+    AUTOMATED = "automated"
+    MANUAL_ASSISTED = "manual_assisted"
+
+
 class Clearance(StrEnum):
-    """What a Candidate's passing Gate lets it see (ADR-0004, ADR-0006)."""
+    """What a Candidate's passing Gate lets it see (ADR-0006)."""
 
     PUBLIC_ONLY = "public_only"
     PUBLIC_AND_PRIVATE = "public_and_private"

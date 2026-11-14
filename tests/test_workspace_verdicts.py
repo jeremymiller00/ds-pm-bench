@@ -4,7 +4,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from bench import SuiteMismatch, Workspace
+from bench import GateNotPassed, SuiteMismatch, Workspace
 from test_workspace_candidates import write_candidate
 from test_workspace_runs import cleared
 from test_workspace_tasks import configure_private_root, write_task
@@ -240,6 +240,38 @@ def test_the_baseline_run_must_be_a_run_of_the_baseline(ws_dir: Path):
 
     with pytest.raises(ValueError, match="not the Baseline"):
         ws.compare(baseline_run, challenger_run)
+
+
+FAILED_REVIEW = dict(
+    reviewer="A. Nother",
+    on=DAY,
+    checklist={"retention": "Trains on inputs", "sso": False, "enterprise_terms": False,
+               "connector_support": "None needed"},
+    passed=False,
+    clearance=None,
+)
+
+
+def test_a_baseline_whose_gate_has_since_failed_cannot_be_compared(ws_dir: Path):
+    ws = Workspace.open(ws_dir)
+    baseline_run = complete_run(ws, BASELINE)
+    challenger_run = complete_run(ws, CHALLENGER)
+
+    ws.record_gate(BASELINE, **FAILED_REVIEW)
+
+    with pytest.raises(GateNotPassed, match=f"Baseline {BASELINE}"):
+        ws.compare(challenger_run, baseline_run)
+
+
+def test_a_candidate_whose_gate_failed_cannot_be_marked_the_baseline(ws_dir: Path):
+    ws = Workspace.open(ws_dir)
+    ws.record_gate(CHALLENGER, **FAILED_REVIEW)
+
+    with pytest.raises(GateNotPassed, match=CHALLENGER):
+        ws.mark_baseline(CHALLENGER)
+
+    assert ws.baseline.id == BASELINE
+    assert Workspace.open(ws_dir).baseline.id == BASELINE
 
 
 @pytest.mark.parametrize(

@@ -17,10 +17,13 @@ from bench.core.rubric import criterion_dict
 from bench.core.tasks import Task
 from bench.core.workspace import Workspace
 
+# Shared by every authoring screen: its form has class editor-form, its inline error
+# class form-error.
 EDITOR_CSS = """
-#editor { width: 90%; height: 90%; border: thick $accent; background: $surface; padding: 0 1; }
-#editor TextArea { height: 6; }
-#editor-error { color: $error; }
+.editor-form { width: 90%; height: 90%; border: thick $accent; background: $surface;
+    padding: 0 1; }
+.editor-form TextArea { height: 6; }
+.form-error { color: $error; }
 """
 
 
@@ -50,7 +53,7 @@ class TaskEditorScreen(ModalScreen[Task | None]):
     def compose(self) -> ComposeResult:
         task = self.workspace.task(self.task_id)
         manual_time = "" if task.manual_time_minutes is None else f"{task.manual_time_minutes:g}"
-        with VerticalScroll(id="editor"):
+        with VerticalScroll(id="editor", classes="editor-form"):
             yield Static(
                 f"Edit {task.id} (v{task.version}, {task.visibility}). "
                 "ctrl+s saves, escape cancels.",
@@ -69,7 +72,7 @@ class TaskEditorScreen(ModalScreen[Task | None]):
             yield Label("Criteria (YAML list of id, name, description)")
             criteria = [criterion_dict(c) for c in task.own_criteria]
             yield TextArea(criteria_yaml(criteria), id="edit-criteria")
-            yield Static("", id="editor-error", markup=False)
+            yield Static("", id="editor-error", classes="form-error", markup=False)
             yield Button("Save", id="editor-save", variant="primary")
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
@@ -105,7 +108,7 @@ class NewTaskScreen(ModalScreen[Task | None]):
     only offered when one is configured (ADR-0006).
     """
 
-    DEFAULT_CSS = EDITOR_CSS.replace("#editor", "#new-task")
+    DEFAULT_CSS = EDITOR_CSS
     BINDINGS = [
         Binding("ctrl+s", "save", "Create", priority=True),
         Binding("escape", "cancel", "Cancel"),
@@ -117,7 +120,7 @@ class NewTaskScreen(ModalScreen[Task | None]):
 
     def compose(self) -> ComposeResult:
         tracks = self.workspace.settings.tracks
-        with VerticalScroll(id="new-task"):
+        with VerticalScroll(id="new-task", classes="editor-form"):
             yield Static("New Task. ctrl+s creates it, escape cancels.", markup=False)
             yield Label("Track")
             yield Select([(t, t) for t in tracks], value=tracks[0], allow_blank=False,
@@ -141,7 +144,7 @@ class NewTaskScreen(ModalScreen[Task | None]):
             yield TextArea(id="new-prompt")
             yield Label("Criteria (YAML list of id, name, description)")
             yield TextArea(id="new-criteria")
-            yield Static("", id="new-error", markup=False)
+            yield Static("", id="new-error", classes="form-error", markup=False)
             yield Button("Create", id="new-save", variant="primary")
 
     def on_button_pressed(self, event: Button.Pressed) -> None:

@@ -34,6 +34,11 @@ class UnknownCandidateError(LookupError):
     """No Candidate with the requested id."""
 
 
+class CandidateAuthoringError(ValueError):
+    """Creating or changing a Candidate was refused: an id taken, the Baseline left
+    unmarked, a superseded version edited, or a field that names a different Candidate."""
+
+
 class GateNotPassed(Exception):
     """A Candidate without a passing Gate cannot be Run (or adopted)."""
 
@@ -44,6 +49,16 @@ class ClearanceError(Exception):
 
 class SuiteUnavailable(Exception):
     """The requested Suite has no Tasks to cover, such as private Clearance but no Private Tasks."""
+
+
+class AttemptError(Exception):
+    """An Attempt refused an action: a Run whose Candidate is not manual-assisted, a Task
+    already recorded, a step out of order, or an Attempt already over."""
+
+
+class EditorError(Exception):
+    """The Editor Adapter could not edit the text: $EDITOR failed to start or exited
+    with an error."""
 
 
 class UnknownRunError(LookupError):

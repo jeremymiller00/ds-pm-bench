@@ -245,6 +245,11 @@ class Run:
         )
 
     @property
+    def progress(self) -> tuple[int, int]:
+        """(Tasks whose Output is recorded, Tasks in the Suite)."""
+        return len(self.tasks) - len(self.pending), len(self.tasks)
+
+    @property
     def pending(self) -> tuple[str, ...]:
         """Task ids in the Suite whose Output is not recorded yet, in Suite order."""
         return tuple(t.id for t in self.tasks if self._task_record(t.id) is None)
@@ -359,6 +364,19 @@ def check_clearance(candidate: Candidate, task: Task) -> None:
         )
 
 
+# The Suites each Clearance allows, the default (all it allows) first (ADR-0006).
+SUITES_FOR_CLEARANCE: Mapping[Clearance, tuple[Suite, ...]] = {
+    Clearance.PUBLIC_ONLY: (Suite.PUBLIC_ONLY,),
+    Clearance.PUBLIC_AND_PRIVATE: (Suite.PUBLIC_AND_PRIVATE, Suite.PUBLIC_ONLY),
+}
+
+
+def suites_for(candidate: Candidate) -> tuple[Suite, ...]:
+    """The Suites a Run of the Candidate may cover, the default first; none without a
+    passing Gate."""
+    return () if candidate.clearance is None else SUITES_FOR_CLEARANCE[candidate.clearance]
+
+
 def choose_suite(
     candidate: Candidate, requested: Suite | str | None, tasks: tuple[Task, ...]
 ) -> Suite:
@@ -368,11 +386,12 @@ def choose_suite(
     cleared Candidate with no Private Tasks loaded is refused rather than silently given
     a public-only Suite; ask for public_only explicitly.
     """
-    cleared = Suite(candidate.clearance)
-    suite = cleared if requested is None else Suite(requested)
-    if suite == Suite.PUBLIC_AND_PRIVATE and cleared != Suite.PUBLIC_AND_PRIVATE:
+    allowed = suites_for(candidate)
+    suite = allowed[0] if requested is None else Suite(requested)
+    if suite not in allowed:
         raise ClearanceError(
-            f"Candidate {candidate.id} is cleared for {cleared}, not a {suite} Suite"
+            f"Candidate {candidate.id} is cleared for {candidate.clearance}, "
+            f"not a {suite} Suite"
         )
     has_private = any(t.visibility == Visibility.PRIVATE for t in tasks)
     if suite == Suite.PUBLIC_AND_PRIVATE and not has_private:
@@ -431,13 +450,30 @@ def _snapshot(run: Run) -> dict[str, Any]:
 
 def _candidate_snapshot(c: Candidate) -> dict[str, Any]:
     """What a Run freezes of its Candidate (ADR-0003): any change here is a new Candidate."""
-    return {
+    snapshot = {
         "id": c.id,
         "tool": c.tool,
         "version": c.version,
-        "adapter": c.adapter,
+        "adapter": str(c.adapter),
         "settings": c.settings,
     }
+    if c.cost_per_task_usd is not None:  # absent from Runs made before it existed
+        snapshot["cost_per_task_usd"] = c.cost_per_task_usd
+    return snapshot
+
+
+def candidate_ids_used(workspace_root: Path) -> set[str]:
+    """Every Candidate id some Run's snapshot holds; frozen per ADR-0003."""
+    return {
+        (yaml.safe_load(path.read_text()) or {}).get("candidate", {}).get("id")
+        for path in (workspace_root / RUNS_FOLDER).glob(f"*/{RUN_FILE}")
+    } - {None}
+
+
+def list_run_ids(workspace_root: Path) -> tuple[str, ...]:
+    """Every Run id under runs/, newest first (ids start with the Run's date)."""
+    paths = (workspace_root / RUNS_FOLDER).glob(f"*/{RUN_FILE}")
+    return tuple(sorted((p.parent.name for p in paths), reverse=True))
 
 
 def task_versions_used(workspace_root: Path) -> set[tuple[str, int]]:
