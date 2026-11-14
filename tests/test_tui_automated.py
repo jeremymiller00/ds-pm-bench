@@ -9,16 +9,16 @@ import shutil
 from pathlib import Path
 
 import pytest
-from textual.widgets import OptionList, Select, Static, TextArea
+from textual.widgets import Button, OptionList, Select, Static, TextArea
 
 from bench import CandidateToolError, Workspace
 from bench.tui.app import BenchApp
-from bench.tui.runs import ManualTaskScreen
+from bench.tui.runs import JudgeScreen, ManualTaskScreen
 from test_tui import write_task
 from test_workspace_attempts import FakeClock
 from test_workspace_automated import FakeAdapter, reply
 from test_workspace_candidates import candidate, write_candidate
-from test_workspace_judging import write_judge_setup
+from test_workspace_judging import PANEL, FakeJudge, FakeJudges, write_judge_setup
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 CANDIDATE = "claude@opus-5-5"
@@ -193,3 +193,140 @@ async def test_a_task_not_yet_sent_cannot_be_edited(ws_dir: Path, clock: FakeClo
 
     assert not isinstance(on_screen, ManualTaskScreen)
     assert "send it first" in status
+
+
+async def edited_run(app: BenchApp, pilot, clock: FakeClock) -> None:
+    """Start the Run, send its Task and save the edit."""
+    await start_run(app, pilot)
+    await send(app, pilot)
+    screen = await edit_task(app, pilot)
+    screen.query_one("#task-draft", TextArea).text = "Predict SMB churn 60 days ahead."
+    await pilot.press("ctrl+s")
+    await pilot.pause()
+
+
+async def open_judge(app: BenchApp, pilot) -> JudgeScreen:
+    await pilot.click("#run-judge")
+    await pilot.pause()
+    assert isinstance(app.screen, JudgeScreen)
+    return app.screen
+
+
+async def override(app: BenchApp, pilot) -> None:
+    await pilot.click("#judge-override")
+    await app.workers.wait_for_complete()
+    await pilot.pause()
+
+
+async def test_an_automated_run_is_sent_edited_and_judged_with_a_logged_override(
+    ws_dir: Path, clock: FakeClock
+):
+    judges = FakeJudges(**{"openai/gpt-6": FakeJudge(scores={"clarity": 2})})
+    app = open_app(ws_dir, clock, FakeAdapter(clock, reply(RAW)), judges)
+    async with app.run_test() as pilot:
+        await edited_run(app, pilot, clock)
+        await open_judge(app, pilot)
+        setup = text(app, "#judge-setup")
+        notice = text(app, "#judge-certification")
+
+        await override(app, pilot)
+        shown = text(app, "#judge-results")
+        await pilot.press("escape")
+        await pilot.pause()
+        back = app.screen
+
+    ws = Workspace.open(ws_dir)
+    assert ws.judge_setup.hash in setup
+    assert "single" in setup and "openai/gpt-6" in setup and "public_only" in setup
+    assert "not certified" in notice and "logged to the Decision Log" in notice
+    assert f"Task {EXAMPLE}" in shown
+    assert "clarity 2" in shown and "correctness 4" in shown
+    assert "openai/gpt-6: Clarity ok." in shown
+    assert "override logged" in shown
+    assert not isinstance(back, JudgeScreen)
+    [entry] = ws.decision_log()
+    assert entry["kind"] == "uncertified_judge_override"
+    assert entry["judge_setup_hash"] == ws.judge_setup.hash
+    (run_id,) = ws.run_ids()
+    assert ws.resume_run(run_id).unjudged == ()
+
+
+async def test_leaving_the_judge_screen_without_the_override_judges_and_logs_nothing(
+    ws_dir: Path, clock: FakeClock
+):
+    judge = FakeJudge()
+    judges = FakeJudges(**{"openai/gpt-6": judge})
+    app = open_app(ws_dir, clock, FakeAdapter(clock, reply(RAW)), judges)
+    async with app.run_test() as pilot:
+        await edited_run(app, pilot, clock)
+        await open_judge(app, pilot)
+        await pilot.press("escape")
+        await pilot.pause()
+
+    assert judge.requests == []
+    assert Workspace.open(ws_dir).decision_log() == ()
+
+
+async def test_a_panel_shows_each_judges_reason_and_flags_a_disagreement(
+    ws_dir: Path, clock: FakeClock
+):
+    write_judge_setup(ws_dir, mode="panel", models=PANEL)
+    judges = FakeJudges(**{
+        "openai/gpt-6": FakeJudge(scores={"clarity": 5}),
+        "google/gemini-4": FakeJudge(scores={"clarity": 2}),
+        "mistral/large-3": FakeJudge(scores={"clarity": 3}),
+    })
+    app = open_app(ws_dir, clock, FakeAdapter(clock, reply(RAW)), judges)
+    async with app.run_test() as pilot:
+        await edited_run(app, pilot, clock)
+        await open_judge(app, pilot)
+        await override(app, pilot)
+        shown = text(app, "#judge-results")
+
+    assert "clarity 3" in shown  # the median
+    assert "Judges disagree on clarity" in shown
+    assert "full human check" in shown
+    for label in ("openai/gpt-6", "google/gemini-4", "mistral/large-3"):
+        assert f"{label}: Clarity ok." in shown
+    assert "same family" not in shown
+
+
+async def test_a_same_family_judge_shows_a_bias_warning(ws_dir: Path, clock: FakeClock):
+    write_judge_setup(ws_dir, models=[{"provider": "anthropic", "model": "claude-haiku-5"}])
+    app = open_app(ws_dir, clock, FakeAdapter(clock, reply(RAW)), FakeJudges())
+    async with app.run_test() as pilot:
+        await edited_run(app, pilot, clock)
+        await open_judge(app, pilot)
+        await override(app, pilot)
+        shown = text(app, "#judge-results")
+
+    assert "same family as the Candidate" in shown and "bias" in shown
+    assert "full human check" in shown
+
+
+async def test_a_refused_judge_setup_is_shown_and_nothing_is_logged(
+    ws_dir: Path, clock: FakeClock
+):
+    write_judge_setup(ws_dir, models=[{"provider": "anthropic", "model": "claude-opus-5-5"}])
+    app = open_app(ws_dir, clock, FakeAdapter(clock, reply(RAW)), FakeJudges())
+    async with app.run_test() as pilot:
+        await edited_run(app, pilot, clock)
+        await open_judge(app, pilot)
+        await override(app, pilot)
+        shown = text(app, "#judge-results")
+
+    assert "anthropic/claude-opus-5-5" in shown and "grades itself" in shown
+    assert Workspace.open(ws_dir).decision_log() == ()
+
+
+async def test_without_a_judge_setup_the_screen_says_so(ws_dir: Path, clock: FakeClock):
+    (ws_dir / "config" / "judge.yaml").unlink()
+    app = open_app(ws_dir, clock, FakeAdapter(clock, reply(RAW)), FakeJudges())
+    async with app.run_test() as pilot:
+        await edited_run(app, pilot, clock)
+        await open_judge(app, pilot)
+        setup = text(app, "#judge-setup")
+        disabled = app.screen.query_one("#judge-override", Button).disabled
+
+    assert "config/judge.yaml" in setup
+    assert disabled

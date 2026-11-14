@@ -27,12 +27,18 @@ from bench.core.errors import (
     ConfigError,
     EditorError,
     GateNotPassed,
+    JudgeNotCertified,
+    JudgeRefused,
+    JudgeReplyError,
+    JudgeSetupMismatch,
+    JudgeUnavailable,
     MissingSecret,
     RunExists,
     RunMismatch,
     SuiteUnavailable,
     UnknownRunError,
 )
+from bench.core.judging import JUDGE_FILE, JudgeSetup, TaskJudging
 from bench.core.kinds import Suite
 from bench.core.manual_time import ManualTimeStopwatch
 from bench.core.runs import OutputRecord, Run
@@ -51,6 +57,15 @@ RUN_ERRORS = (
 )
 # What can stop one automated Task from being sent; shown against that Task.
 SEND_ERRORS = (AttemptError, CandidateToolError, ClearanceError, GateNotPassed, MissingSecret)
+# What the Workspace refuses when judging a Run, shown on the Judge screen.
+JUDGE_ERRORS = (
+    ClearanceError,
+    JudgeNotCertified,
+    JudgeRefused,
+    JudgeReplyError,
+    JudgeSetupMismatch,
+    JudgeUnavailable,
+)
 
 
 class RunsPane(Vertical):
@@ -88,6 +103,7 @@ class RunsPane(Vertical):
         yield Static("No Run open.", id="run-progress", markup=False)
         with Horizontal(id="run-actions"):
             yield Button("Send pending Tasks", id="run-send", disabled=True)
+            yield Button("Judge Run", id="run-judge", disabled=True)
         yield Label("Pending Tasks (enter to work or edit one)")
         yield OptionList(id="run-tasks")
         yield Label("Tasks with Manual Time still a placeholder (enter to time one by hand)")
@@ -173,6 +189,7 @@ class RunsPane(Vertical):
         self.run = run
         self.send_errors = {}
         self.query_one("#run-send", Button).disabled = run.candidate.manual_assisted
+        self.query_one("#run-judge", Button).disabled = False
         self._show_progress()
 
     def _show_progress(self) -> None:
@@ -188,6 +205,19 @@ class RunsPane(Vertical):
         tasks.add_options(
             Option(self._automated_label(run, task_id), id=task_id) for task_id in run.pending
         )
+
+    @on(Button.Pressed, "#run-judge")
+    def _judge(self) -> None:
+        run = self.run
+        if run is None:
+            return
+
+        def closed(judged: tuple[TaskJudging, ...] | None) -> None:
+            self._show_progress()
+            if judged:
+                self._status(f"Judged {len(judged)} Task(s) of Run {run.id}.")
+
+        self.app.push_screen(JudgeScreen(self.workspace, run), closed)
 
     def _automated_label(self, run: Run, task_id: str) -> str:
         if self.workspace.pending_output(run, task_id) is not None:
@@ -393,6 +423,108 @@ EDITOR_NOTE = (
     "e opens the draft in $EDITOR; the app suspends and all the time it is open counts "
     "as active time."
 )
+class JudgeScreen(Screen[tuple[TaskJudging, ...] | None]):
+    """Judge a Run: shows the Judge Setup and its hash and, until Certification arrives,
+    asks for an explicit override that the Workspace logs. Then shows each Task's
+    Criterion scores with every Judge's reason, panel disagreements and bias warnings.
+
+    Dismisses with what was judged, or None when left without judging.
+    """
+
+    DEFAULT_CSS = """
+    JudgeScreen #judge-setup, JudgeScreen #judge-certification { height: auto; padding: 0 1; }
+    JudgeScreen #judge-certification { color: $warning; }
+    JudgeScreen #judge-results { height: auto; padding: 0 1; }
+    """
+    BINDINGS = [Binding("escape", "leave", "Back to the Run")]
+
+    def __init__(self, workspace: Workspace, run: Run) -> None:
+        super().__init__()
+        self.workspace = workspace
+        self.run = run
+        self.judged: tuple[TaskJudging, ...] | None = None
+
+    def compose(self) -> ComposeResult:
+        setup = self.workspace.judge_setup
+        with VerticalScroll():
+            yield Static(f"Judge Run {self.run.id}", markup=False)
+            yield Static(judge_setup_summary(setup), id="judge-setup", markup=False)
+            yield Static(UNCERTIFIED_NOTICE, id="judge-certification", markup=False)
+            yield Button("Judge with uncertified override (logged)", id="judge-override",
+                         variant="warning", disabled=setup is None)
+            yield Static("", id="judge-results", markup=False)
+        yield Footer()
+
+    @on(Button.Pressed, "#judge-override")
+    def _override(self) -> None:
+        self.query_one("#judge-override", Button).disabled = True
+        self._results("Judging...")
+        self.run_worker(self._judge(), group="judge", exclusive=True)
+
+    async def _judge(self) -> None:
+        try:
+            judged = await asyncio.to_thread(
+                self.workspace.judge_run, self.run, allow_uncertified=True
+            )
+        except JUDGE_ERRORS as exc:
+            self._results(f"Not judged: {exc}")
+            self.query_one("#judge-override", Button).disabled = False
+            return
+        self.judged = judged
+        self._results(judging_summary(judged))
+
+    def action_leave(self) -> None:
+        self.dismiss(self.judged)
+
+    def _results(self, message: str) -> None:
+        self.query_one("#judge-results", Static).update(message)
+
+
+UNCERTIFIED_NOTICE = (
+    "This Judge Setup is not certified: Certification against the human-scored "
+    "Calibration Set is not built yet. Judging needs an explicit override, and every "
+    "override is logged to the Decision Log with the Judge Setup hash. Escape goes back "
+    "without judging."
+)
+
+
+def judge_setup_summary(setup: JudgeSetup | None) -> str:
+    if setup is None:
+        return f"No Judge Setup: {JUDGE_FILE} is missing, so this Run cannot be judged."
+    models = ", ".join(m.label for m in setup.models)
+    return (
+        f"Judge Setup {setup.hash}: {setup.mode}, {models}; cleared for "
+        f"{setup.clearance}; prompt {setup.prompt_file}"
+    )
+
+
+def judging_summary(judged: tuple[TaskJudging, ...]) -> str:
+    if not judged:
+        return "Nothing to judge: every recorded Output is already scored."
+    lines = ["Judged with the uncertified override logged to the Decision Log."]
+    for judging in judged:
+        lines += ["", f"Task {judging.task_id}"]
+        if judging.same_family:
+            lines.append(
+                "  Warning: a Judge is the same family as the Candidate, a bias risk; "
+                "full human check of every Criterion."
+            )
+        if judging.disagreements:
+            lines.append(
+                f"  Judges disagree on {', '.join(judging.disagreements)} by more than a "
+                "point; full human check."
+            )
+        for criterion, score in judging.scores.items():
+            flag = "  (disagreement)" if criterion in judging.disagreements else ""
+            lines.append(f"  {criterion} {score:g}{flag}")
+            lines += [
+                f"    {label}: {scores[criterion].reason}"
+                + (f" ({scores[criterion].score})" if len(judging.judges) > 1 else "")
+                for label, scores in judging.judges.items()
+            ]
+    return "\n".join(lines)
+
+
 class ManualTimeScreen(ModalScreen[Task | None]):
     """A stopwatch on a person doing a Task by hand; ctrl+s stops it and records the
     Manual Time, escape cancels. Dismisses with the updated Task, or None."""
