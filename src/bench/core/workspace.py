@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import datetime
 import shutil
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -21,6 +21,12 @@ from bench.core.adapters import (
 )
 from bench.core.attempts import Attempt
 from bench.core.automated import ReturnedOutput, load_returned, run_task
+from bench.core.calibration import (
+    Agreement,
+    BlindCalibrationItem,
+    CalibrationItem,
+    CalibrationSet,
+)
 from bench.core.candidates import (
     CANDIDATES_FOLDER,
     Candidate,
@@ -36,11 +42,19 @@ from bench.core.candidates import (
     write_candidate,
 )
 from bench.core.catalog import CATALOG
-from bench.core.decisions import log_override, log_verdict, override_logged, read_log
+from bench.core.decisions import (
+    certified,
+    log_certification,
+    log_override,
+    log_verdict,
+    override_logged,
+    read_log,
+)
 from bench.core.errors import (
     AttemptError,
     CandidateAuthoringError,
     CandidateUnavailable,
+    CertificationFailed,
     GateNotPassed,
     JudgeClearanceError,
     JudgeNotCertified,
@@ -620,30 +634,31 @@ class Workspace:
         Every refusal is a JudgingError, raised before any judge model is called: a Run
         with pending Tasks (RunNotFinished); no Judge Setup, or a judge model that
         cannot be made, its API key missing included (JudgeUnavailable); an uncertified
-        Judge Setup without allow_uncertified (JudgeNotCertified; Certification arrives
-        in slice 5); a Run already judged by another Judge Setup (JudgeSetupMismatch); a
-        judge model that is the model the Candidate calls (JudgeRefused); a Private Task
-        to a Judge Setup without private Clearance (JudgeClearanceError).
+        Judge Setup without allow_uncertified (JudgeNotCertified); a Run already judged
+        by another Judge Setup (JudgeSetupMismatch); a judge model that is the model the
+        Candidate calls (JudgeRefused); a Private Task to a Judge Setup without private
+        Clearance (JudgeClearanceError). A certified Judge Setup (certify_judge) needs no
+        override and logs none.
 
-        The uncertified override is appended to the Decision Log once the first Task is
-        judged, and only once per Run and Judge Setup, so a resumed judging logs nothing
-        new. A malformed reply raises JudgeReplyError; Tasks judged before it stay
-        recorded, so judging again resumes. A same-family judge model marks every Task
-        for a full human check. Once every Task is judged, the Run's Spot-check queue is
-        sampled (bench.core.spot_checks), once.
+        For an uncertified Judge Setup the override is appended to the Decision Log once
+        the first Task is judged, and only once per Run and Judge Setup, so a resumed
+        judging logs nothing new. A malformed reply raises JudgeReplyError; Tasks judged
+        before it stay recorded, so judging again resumes. A same-family judge model
+        marks every Task for a full human check. Once every Task is judged, the Run's
+        Spot-check queue is sampled (bench.core.spot_checks), once.
         """
-        setup = self.judge_setup
-        if setup is None:
-            raise JudgeUnavailable(f"no Judge Setup: {JUDGE_FILE} is missing")
+        setup = self._require_judge_setup()
         if run.pending:
             raise RunNotFinished(
                 f"Run {run.id} is not finished: {', '.join(run.pending)} still pending; "
                 "judge it once every Task's Output is recorded"
             )
-        if not allow_uncertified:
+        is_certified = certified(self.root, setup.hash)
+        if not is_certified and not allow_uncertified:
             raise JudgeNotCertified(
-                f"Judge Setup {setup.hash} is not certified; pass allow_uncertified=True "
-                "to judge anyway, which is logged to the Decision Log"
+                f"Judge Setup {setup.hash} is not certified; recalibrate it on the "
+                "Calibration Set and certify it, or pass allow_uncertified=True to judge "
+                "anyway, which is logged to the Decision Log"
             )
         run.check_judge_setup(setup)
         candidate = run.candidate
@@ -674,19 +689,10 @@ class Workspace:
                 gold_answer=task.gold_answer_path.read_text(),
                 output=run.final_output(task.id),
             )
-            judging = TaskJudging(
-                task_id=task.id,
-                judges={
-                    label: parse_reply(
-                        model.judge(request), request.criteria,
-                        f"judge model {label} on Task {task.id}",
-                    )
-                    for label, model in models.items()
-                },
-                same_family=family,
-            )
+            judging = _judging(task.id, request, models, same_family=family,
+                               where=f"Task {task.id}")
             run.record_judging(judging, setup)
-            if not override_logged(self.root, run.id, setup.hash):
+            if not is_certified and not override_logged(self.root, run.id, setup.hash):
                 log_override(self.root, self.clock.today(), run.id, candidate.id, setup.hash)
             judged.append(judging)
         self._queue_spot_checks(run)
@@ -703,6 +709,111 @@ class Workspace:
             covered_before=tracks_spot_checked_before(self.root, run),
             full_checks=run.full_human_checks,
         ))
+
+    @property
+    def calibration_set(self) -> CalibrationSet:
+        return CalibrationSet(self.root, self.settings.private_roots)
+
+    def add_calibration_item(
+        self, run_id: str, task_id: str, *, on: datetime.date | None = None
+    ) -> CalibrationItem:
+        """Add a finished Run's final Output of a Task to the Calibration Set, Spot-checked
+        or not (stories 40, 48). A Private Task's content goes to its private root and
+        the public record keeps numbers only (ADR-0006). An unfinished Run, or an Output
+        already in the set, raises CalibrationError."""
+        run = self.resume_run(run_id)
+        return self.calibration_set.add(run, task_id, on or self.clock.today())
+
+    def calibration_items(self) -> tuple[CalibrationItem, ...]:
+        """Every Calibration Set item's numbers, oldest first."""
+        return self.calibration_set.items()
+
+    def unscored_calibration_items(self) -> tuple[BlindCalibrationItem, ...]:
+        """The items still awaiting a human score, as the human sees them: content only,
+        never the Judge's scores, the Run or the Candidate."""
+        cal = self.calibration_set
+        return tuple(cal.blind(i.id) for i in cal.items() if not i.human_scored)
+
+    def score_calibration_item(self, item_id: str, scores: Mapping[str, int]) -> CalibrationItem:
+        """Record the human's blind score, a whole number 1-5, of every Criterion of a
+        Calibration Set item; scoring it again replaces the earlier scores. Scores not
+        matching its Criteria raise CalibrationError and change nothing."""
+        return self.calibration_set.record_human_scores(item_id, scores)
+
+    def judge_calibration_set(self) -> tuple[TaskJudging, ...]:
+        """Have the Judge Setup score every Calibration Set item it has not scored yet.
+
+        The Judge sees what it sees in a Run (input, Rubric, Gold Answer, final Output),
+        never the human scores or the Candidate; TaskJudging.task_id is the item id.
+        Refusals are raised before any judge model is called: no Judge Setup or judge
+        models (JudgeUnavailable), a private item to a Judge Setup without private
+        Clearance (JudgeClearanceError). Items scored before a malformed reply stay
+        recorded, so judging again resumes.
+        """
+        setup = self._require_judge_setup()
+        cal = self.calibration_set
+        items = [i for i in cal.items() if setup.hash not in i.judge_scores]
+        for item in items:
+            if item.visibility == Visibility.PRIVATE and (
+                setup.clearance != Clearance.PUBLIC_AND_PRIVATE
+            ):
+                raise JudgeClearanceError(
+                    f"calibration item {item.id} is private and Judge Setup {setup.hash} "
+                    f"is cleared for {setup.clearance}"
+                )
+        models = {spec.label: self._judge_model(spec) for spec in setup.models}
+        judged = []
+        for item in items:
+            blind = cal.blind(item.id)
+            request = JudgeRequest(prompt=setup.prompt, input=blind.input,
+                                   criteria=blind.criteria, gold_answer=blind.gold_answer,
+                                   output=blind.output)
+            judging = _judging(item.id, request, models, same_family=False)
+            cal.record_judging(item.id, judging, setup)
+            judged.append(judging)
+        return tuple(judged)
+
+    def calibration_agreement(self) -> Agreement:
+        """The current Judge Setup's agreement with the human scores on the Calibration
+        Set: per Criterion and pooled, the share within 1 point and the quadratic
+        weighted kappa, against the configured thresholds."""
+        setup = self._require_judge_setup()
+        thresholds = self.settings.calibration
+        return self.calibration_set.agreement(
+            setup.hash, thresholds.within_one_point, thresholds.weighted_kappa
+        )
+
+    @property
+    def judge_certified(self) -> bool:
+        """Whether the current Judge Setup is certified: a Certification of its hash is in
+        the Decision Log. Editing its models or prompt makes a new hash, uncertified
+        until it is calibrated and certified itself (story 44). False with no Judge Setup."""
+        return self.judge_setup is not None and certified(self.root, self.judge_setup.hash)
+
+    def certify_judge(self, *, on: datetime.date | None = None) -> Agreement:
+        """Certify the current Judge Setup on the Calibration Set and log it to the
+        Decision Log; returns the agreement it was certified on.
+
+        Every item must have a human score and this Judge Setup's score, and every
+        Criterion must meet the configured thresholds (settings calibration:
+        within_one_point, weighted_kappa); otherwise CertificationFailed names each
+        shortfall and nothing is logged. Certifying a certified Judge Setup logs nothing new.
+        """
+        setup = self._require_judge_setup()
+        agreement = self.calibration_agreement()
+        if not agreement.meets_thresholds:
+            raise CertificationFailed(
+                f"Judge Setup {setup.hash} is not certified: " + "; ".join(agreement.shortfalls)
+            )
+        if not self.judge_certified:
+            item_ids = tuple(i.id for i in self.calibration_set.items())
+            log_certification(self.root, on or self.clock.today(), setup, agreement, item_ids)
+        return agreement
+
+    def _require_judge_setup(self) -> JudgeSetup:
+        if self.judge_setup is None:
+            raise JudgeUnavailable(f"no Judge Setup: {JUDGE_FILE} is missing")
+        return self.judge_setup
 
     def _judge_model(self, spec: JudgeModelSpec) -> JudgeModel:
         if self.judges is None:
@@ -777,3 +888,24 @@ class Workspace:
     def decision_log(self) -> tuple[dict[str, Any], ...]:
         """Every Decision Log entry, oldest first, as written to decisions/."""
         return read_log(self.root)
+
+
+def _judging(
+    task_id: str,
+    request: JudgeRequest,
+    models: Mapping[str, JudgeModel],
+    *,
+    same_family: bool,
+    where: str | None = None,
+) -> TaskJudging:
+    """Every judge model's parsed reply to the request."""
+    where = where or f"calibration item {task_id}"
+    return TaskJudging(
+        task_id=task_id,
+        judges={
+            label: parse_reply(model.judge(request), request.criteria,
+                               f"judge model {label} on {where}")
+            for label, model in models.items()
+        },
+        same_family=same_family,
+    )
