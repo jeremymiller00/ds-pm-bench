@@ -117,6 +117,12 @@ def load_pending(run: Run, task_id: str) -> PendingOutput | None:
     return PendingOutput(task_id=task.id, raw=raw, **numbers)
 
 
+def discard_pending(run: Run, task_id: str) -> None:
+    """Remove a Task's Pending Output numbers once its edit pass records the Output.
+    The raw file stays: it is where the recorded raw Output lives too."""
+    _numbers_file(run, task_id).unlink(missing_ok=True)
+
+
 def _save(run: Run, pending: PendingOutput) -> None:
     task = run.task(pending.task_id)
     raw = _raw_file(run, task.id)

@@ -1,10 +1,14 @@
-"""An Attempt: one manual-assisted pass at a Task within a Run, from showing the
+"""An Attempt: one pass at a Task within a Run, from showing the
 Canonical Prompt to saving the final.
 
 begin (Workspace.begin_manual_task; Clearance is checked first and the clock starts)
 -> submit_raw (latency = start to paste) -> edit, in the TUI's built-in editor with
 pause/resume or in $EDITOR via edit_externally (all its open time counts) -> finish
 (records raw, final, active seconds = start to save minus pauses, latency and cost).
+
+For an automated Run, the edit pass (Workspace.begin_edit_pass) is an Attempt that
+starts with the Pending Output's raw already in: active seconds are the editing time,
+and latency and cost are the API call's. Finishing removes the Pending Output.
 
 Abandoning records nothing, so the Task can be begun again until it is finished.
 """
@@ -15,6 +19,7 @@ from collections.abc import Callable
 from enum import StrEnum
 
 from bench.core.adapters import Clock, Editor
+from bench.core.automated import PendingOutput, discard_pending
 from bench.core.errors import AttemptError
 from bench.core.runs import OutputRecord, Run
 
@@ -34,6 +39,7 @@ class Attempt:
         clock: Clock,
         editor: Editor,
         check_permitted: Callable[[], None],
+        pending: PendingOutput | None = None,
     ) -> None:
         self.run = run
         self.task_id = task_id
@@ -50,6 +56,11 @@ class Attempt:
         self.raw: str | None = None
         self.latency_seconds: float | None = None
         self.draft: str | None = None  # the latest edit; the raw Output until edited
+        # An automated Task's raw Output, already returned: the edit pass starts with it.
+        self._pending = pending
+        if pending is not None:
+            self.raw = self.draft = pending.raw
+            self.latency_seconds = pending.latency_seconds
 
     @property
     def paused(self) -> bool:
@@ -114,10 +125,18 @@ class Attempt:
             final=self.draft if final is None else final,
             active_seconds=self.active_seconds,
             latency_seconds=self.latency_seconds,
-            cost_usd=self.run.candidate.task_cost_usd,
+            cost_usd=self._cost_usd,
         )
+        if self._pending is not None:
+            discard_pending(self.run, self.task_id)
         self.state = AttemptState.FINISHED
         return record
+
+    @property
+    def _cost_usd(self) -> float | None:
+        if self._pending is not None:
+            return self._pending.cost_usd
+        return self.run.candidate.task_cost_usd
 
     def abandon(self) -> None:
         """Abandon the Attempt, recording nothing; the Task can be begun again."""

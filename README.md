@@ -50,8 +50,11 @@ git-ignored `.env` at the repo root (ADR 0005). Prices come from `config/prices.
 keyed by model id; a model with no price gets a null cost.
 
 `Workspace.run_automated_task(run, task_id)` sends one Task, retrying once on a tool
-error, and stores the raw Output pending its edit pass. The live smoke tests are
-skipped unless you opt in:
+error, and stores the raw Output pending its edit pass; a Task that errored twice
+stores nothing and can be sent again later. `Workspace.begin_edit_pass(run, task_id)`
+returns an Attempt with the raw Output already in: edit, pause and `$EDITOR` work as
+for manual Attempts, and finishing records the editing time as active seconds with
+the API call's latency and cost. The live smoke tests are skipped unless you opt in:
 
 ```sh
 BENCH_LIVE=1 ANTHROPIC_API_KEY=... BENCH_LIVE_ANTHROPIC_MODEL=<model id> uv run pytest -m live

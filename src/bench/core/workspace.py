@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import datetime
 import shutil
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -529,12 +529,16 @@ class Workspace:
         if task_id not in run.pending:
             raise AttemptError(f"Run {run.id}: Task {task_id}'s Output is already recorded")
 
+        return Attempt(run, task_id, prompt, self.clock, self.editor,
+                       self._permission_check(run, task_id))
+
+    def _permission_check(self, run: Run, task_id: str) -> Callable[[], None]:
         def check_permitted() -> None:
             candidate = self.candidate(run.candidate_id)  # its latest Gate review
             check_gate(candidate)
             check_clearance(candidate, self.task(task_id))
 
-        return Attempt(run, task_id, prompt, self.clock, self.editor, check_permitted)
+        return check_permitted
 
     def run_automated_task(self, run: Run, task_id: str) -> PendingOutput:
         """Send a Task of an automated Run to its Candidate and store the raw Output
@@ -562,6 +566,32 @@ class Workspace:
             )
         adapter = self.candidate_adapters(run.candidate)
         return run_task(run, task_id, prompt, adapter, self.clock, self.prices)
+
+    def begin_edit_pass(self, run: Run, task_id: str) -> Attempt:
+        """Begin the edit pass of an automated Task whose raw Output came back: returns
+        an Attempt with the raw Output already in, the edit clock starting now.
+
+        It edits, pauses and opens $EDITOR as a manual Attempt does; finishing records
+        raw, final, active seconds (the editing time), and the API call's latency and
+        cost, then removes the Pending Output. Abandoning keeps it for another pass.
+        The latest Gate and Clearance are checked at begin and again at finish
+        (GateNotPassed, ClearanceError). A Task with no Pending Output raises AttemptError.
+        """
+        if run.candidate.manual_assisted:
+            raise AttemptError(
+                f"Run {run.id}: Candidate {run.candidate_id} is {run.candidate.adapter}; "
+                "begin its Tasks with begin_manual_task"
+            )
+        prompt = self.task_input(run, task_id)
+        if task_id not in run.pending:
+            raise AttemptError(f"Run {run.id}: Task {task_id}'s Output is already recorded")
+        pending = load_pending(run, task_id)
+        if pending is None:
+            raise AttemptError(
+                f"Run {run.id}: Task {task_id} has no raw Output to edit; send it first"
+            )
+        return Attempt(run, task_id, prompt, self.clock, self.editor,
+                       self._permission_check(run, task_id), pending=pending)
 
     def pending_output(self, run: Run, task_id: str) -> PendingOutput | None:
         """A Task's raw Output awaiting its edit pass, or None if it has none."""
