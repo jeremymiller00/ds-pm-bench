@@ -9,7 +9,7 @@ from textual.containers import Vertical
 from textual.widgets import DataTable, Static
 
 from bench.core.candidates import Candidate
-from bench.core.errors import CandidateAuthoringError
+from bench.core.errors import CandidateAuthoringError, GateNotPassed
 from bench.core.workspace import Workspace
 from bench.tui.candidate_editor import GateRecorded, GateScreen, NewCandidateScreen
 
@@ -75,7 +75,7 @@ class CandidateBrowser(Vertical):
             return
         try:
             marked = self.workspace.mark_baseline(candidate_id)
-        except CandidateAuthoringError as error:
+        except (CandidateAuthoringError, GateNotPassed) as error:
             self._status(str(error))
             return
         self.refresh_candidates(select=marked.id)

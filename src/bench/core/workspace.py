@@ -23,6 +23,7 @@ from bench.core.catalog import CATALOG
 from bench.core.decisions import log_verdict, read_log
 from bench.core.errors import (
     CandidateAuthoringError,
+    GateNotPassed,
     TaskAuthoringError,
     TaskNotRunnable,
     UnknownCandidateError,
@@ -317,9 +318,14 @@ class Workspace:
         """Make the Candidate the Baseline, unmarking the previous one.
 
         The mark is a designation, not part of what a Run freezes, so it moves in place
-        even on a used Candidate.
+        even on a used Candidate. A Candidate whose Gate failed cannot hold it
+        (GateNotPassed); one not yet reviewed can, but cannot be compared until it passes.
         """
         target = self.candidate(candidate_id)
+        if target.gate is not None and not target.gate.passed:
+            raise GateNotPassed(
+                f"Candidate {target.id}'s Gate failed, so it cannot be the Baseline"
+            )
         self._write(target, baseline=True)
         self._unmark_baselines_except(target.id)
         self._reload_candidates()
@@ -501,15 +507,22 @@ class Workspace:
         """Compare a challenger Run with a Baseline Run and reach a Verdict.
 
         Spot-checks recorded on either Run (Run.record_spot_check) are weighed too.
+        The Baseline must hold a passing Gate: its latest review applies (GateNotPassed).
         """
+        baseline = self.baseline
+        if baseline is not None and not baseline.gate_passed:
+            raise GateNotPassed(
+                f"Baseline {baseline.id}'s latest Gate review has not passed, so nothing "
+                "can be compared with it; re-review its Gate or mark another Baseline"
+            )
         challenger = self.resume_run(challenger_run_id)
-        baseline = self.resume_run(baseline_run_id)
+        baseline_run = self.resume_run(baseline_run_id)
         return compare(
             self.settings,
             challenger,
             self.score(challenger.task_results()),
-            baseline,
-            self.score(baseline.task_results()),
+            baseline_run,
+            self.score(baseline_run.task_results()),
         )
 
     def gate_verdict(self, candidate_id: str) -> Verdict:
