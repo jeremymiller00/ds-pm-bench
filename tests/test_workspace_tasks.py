@@ -228,8 +228,9 @@ def test_complete_task_is_runnable(workspace_dir: Path):
         (dict(gold="TODO: PM to write after sanitizing.\n"), "Gold Answer"),
         (dict(gold="   \n"), "Gold Answer"),
         (dict(manual_time="null"), "Manual Time"),
+        (dict(prompt="TODO: draft the Canonical Prompt."), "Canonical Prompt"),
     ],
-    ids=["todo-input", "todo-gold-with-note", "blank-gold", "untimed"],
+    ids=["todo-input", "todo-gold-with-note", "blank-gold", "untimed", "todo-prompt"],
 )
 def test_task_with_a_placeholder_loads_but_is_refused_for_running(
     workspace_dir: Path, tmp_path: Path, task_args: dict, missing: str

@@ -50,7 +50,8 @@ class Task:
     folder: Path  # <root>/<tasks or examples>/<id>
     input_path: Path
     gold_answer_path: Path
-    # What is still a placeholder ("input", "Gold Answer", "Manual Time").
+    # What is still a placeholder ("input", "Gold Answer", "Manual Time",
+    # "Canonical Prompt").
     # A Task with any placeholder loads, so it can be edited, but cannot be Run.
     placeholders: tuple[str, ...]
 
@@ -120,9 +121,10 @@ def load_task(
     placeholders = tuple(
         name
         for name, missing in (
-            ("input", _is_placeholder(input_path)),
-            ("Gold Answer", _is_placeholder(gold_path)),
+            ("input", _is_placeholder(input_path.read_text(errors="replace"))),
+            ("Gold Answer", _is_placeholder(gold_path.read_text(errors="replace"))),
             ("Manual Time", manual_time is None),
+            ("Canonical Prompt", _is_placeholder(prompt)),
         )
         if missing
     )
@@ -296,9 +298,9 @@ def _write_criteria(folder: Path, criteria: Iterable[CriterionSpec]) -> None:
     )
 
 
-def _is_placeholder(path: Path) -> bool:
+def _is_placeholder(text: str) -> bool:
     """Empty, or starting with TODO (the scaffold's marker)."""
-    text = path.read_text(errors="replace").strip()
+    text = text.strip()
     return not text or text.upper().startswith("TODO")
 
 
