@@ -34,6 +34,11 @@ class UnknownCandidateError(LookupError):
     """No Candidate with the requested id."""
 
 
+class CandidateAuthoringError(ValueError):
+    """Creating or changing a Candidate was refused: an id taken, the Baseline left
+    unmarked, a superseded version edited, or a field that names a different Candidate."""
+
+
 class GateNotPassed(Exception):
     """A Candidate without a passing Gate cannot be Run (or adopted)."""
 

@@ -2,6 +2,7 @@
 
 from bench.core.adapters import Clock, Editor, ExternalEditor, SystemClock
 from bench.core.errors import (
+    CandidateAuthoringError,
     ClearanceError,
     ConfigError,
     GateNotPassed,
@@ -24,6 +25,7 @@ from bench.core.verdicts import Comparison, Verdict
 from bench.core.workspace import Workspace
 
 __all__ = [
+    "CandidateAuthoringError",
     "Clock",
     "Comparison",
     "ClearanceError",
