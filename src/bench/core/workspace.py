@@ -67,7 +67,7 @@ from bench.core.judging import (
 from bench.core.kinds import AdapterKind, Clearance, Suite, Visibility
 from bench.core.lookup import find_by_id
 from bench.core.manual_time import ManualTimeStopwatch
-from bench.core.prices import PriceTable, load_prices
+from bench.core.prices import PriceTable, load_prices, remove_price, set_price
 from bench.core.results import TaskResult
 from bench.core.rubric import Rubric, load_rubric
 from bench.core.runs import (
@@ -730,6 +730,21 @@ class Workspace:
         """
         self.settings = edit_settings(self.root, changes, self._tracks_in_use())
         return self.settings
+
+    def set_price(
+        self, model: str, *, input_per_mtok: float, output_per_mtok: float
+    ) -> PriceTable:
+        """Add or change a model's token prices (USD per million tokens) in
+        config/prices.yaml. The model is the exact string a Candidate uses. An invalid
+        price raises ConfigError naming the field and writes nothing."""
+        self.prices = set_price(self.root, model, input_per_mtok, output_per_mtok)
+        return self.prices
+
+    def remove_price(self, model: str) -> PriceTable:
+        """Remove a model from the price table; ConfigError if it has no price. A Run's
+        recorded costs are kept: cost is computed when a Task is sent."""
+        self.prices = remove_price(self.root, model)
+        return self.prices
 
     def _tracks_in_use(self) -> dict[str, list[str]]:
         """Each Track a loaded Task or a Run's Task version declares -> what declares it."""

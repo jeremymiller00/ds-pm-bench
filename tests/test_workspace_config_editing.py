@@ -147,3 +147,56 @@ def test_removing_a_track_only_a_run_used_task_version_uses_is_refused(workspace
 
     with pytest.raises(ConfigEditRefused, match=r"T1\.1 version 1"):
         ws.update_settings(tracks=["Specs", "Prioritize", "Story"])
+
+
+def prices_yaml(root: Path) -> dict:
+    return yaml.safe_load((root / "config" / "prices.yaml").read_text())
+
+
+def test_a_model_price_is_added_changed_and_removed(workspace_dir: Path):
+    ws = Workspace.open(workspace_dir)
+
+    ws.set_price("openai/gpt-6", input_per_mtok=2.5, output_per_mtok=10)
+    ws.set_price("anthropic/claude-x", input_per_mtok=3, output_per_mtok=15)
+    table = ws.set_price("openai/gpt-6", input_per_mtok=2, output_per_mtok=8)
+
+    assert table.models["openai/gpt-6"].input_per_mtok == 2
+    assert list(prices_yaml(workspace_dir)["models"]) == ["openai/gpt-6", "anthropic/claude-x"]
+    assert Workspace.open(workspace_dir).prices == table
+
+    table = ws.remove_price("openai/gpt-6")
+
+    assert list(table.models) == ["anthropic/claude-x"]
+    assert ws.prices == table == Workspace.open(workspace_dir).prices
+    assert (workspace_dir / "config" / "prices.yaml").read_text().startswith("# Price table")
+
+
+@pytest.mark.parametrize(
+    "model, prices, field",
+    [
+        ("openai/gpt-6", {"input_per_mtok": -1, "output_per_mtok": 1},
+         "models.openai/gpt-6.input_per_mtok"),
+        ("openai/gpt-6", {"input_per_mtok": 1, "output_per_mtok": "cheap"},
+         "models.openai/gpt-6.output_per_mtok"),
+        (" ", {"input_per_mtok": 1, "output_per_mtok": 1}, "models"),
+    ],
+    ids=["negative", "not-a-number", "blank-model"],
+)
+def test_an_invalid_price_names_the_field_and_writes_nothing(
+    workspace_dir: Path, model, prices, field
+):
+    ws = Workspace.open(workspace_dir)
+    before = (workspace_dir / "config" / "prices.yaml").read_text()
+
+    with pytest.raises(ConfigError) as err:
+        ws.set_price(model, **prices)
+
+    assert (err.value.file, err.value.field) == ("config/prices.yaml", field)
+    assert (workspace_dir / "config" / "prices.yaml").read_text() == before
+
+
+def test_removing_an_unpriced_model_names_it(workspace_dir: Path):
+    with pytest.raises(ConfigError) as err:
+        Workspace.open(workspace_dir).remove_price("openai/gpt-6")
+
+    assert (err.value.file, err.value.field) == ("config/prices.yaml", "models.openai/gpt-6")
