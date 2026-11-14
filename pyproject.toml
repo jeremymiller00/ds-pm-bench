@@ -8,6 +8,7 @@ authors = [
 requires-python = ">=3.12,<3.13"
 dependencies = [
     "pyyaml>=6.0.3",
+    "textual>=8.2.8",
 ]
 
 [build-system]
@@ -17,12 +18,14 @@ build-backend = "uv_build"
 [dependency-groups]
 dev = [
     "pytest>=9.2.0",
+    "pytest-asyncio>=1.5.0",
     "ruff>=0.17.5",
 ]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-ra"
+asyncio_mode = "auto"
 
 [project.scripts]
 bench = "bench.cli:main"

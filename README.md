@@ -15,6 +15,7 @@ uv sync
 uv run pytest            # includes the golden Verdict fixtures, driven through the CLI
 uv run ruff check        # lint and import order; also runs as a pre-commit hook
 uv run bench --help
+uv run bench               # open the TUI (same as `bench tui`)
 ```
 
 Run every command from the benchmark repo root, or pass `--workspace DIR`. The
