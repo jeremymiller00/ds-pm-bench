@@ -14,6 +14,7 @@ from bench.core.candidates import (
     Candidate,
     candidate_data,
     candidate_id_for,
+    gate_data,
     load_candidates,
     write_candidate,
 )
@@ -26,7 +27,8 @@ from bench.core.errors import (
     UnknownCandidateError,
     UnknownTaskError,
 )
-from bench.core.kinds import Suite
+from bench.core.fields import FieldReader
+from bench.core.kinds import Clearance, Suite
 from bench.core.lookup import find_by_id
 from bench.core.prices import PriceTable, load_prices
 from bench.core.results import TaskResult
@@ -297,6 +299,35 @@ class Workspace:
         for other in self.candidates:
             if other.baseline and other.id != candidate_id:
                 self._write(other, baseline=False)
+
+    def record_gate(
+        self,
+        candidate_id: str,
+        *,
+        reviewer: str,
+        on: datetime.date,
+        checklist: dict[str, Any],
+        passed: bool,
+        clearance: Clearance | str | None,
+    ) -> Candidate:
+        """Record the Candidate's Gate review, replacing any earlier one.
+
+        checklist holds retention (text), sso (bool), enterprise_terms (bool) and
+        connector_support (text). A passing Gate needs a Clearance; a failed one grants
+        none, and appends a reject Verdict to the Decision Log dated on (story 18).
+        Invalid fields raise ConfigError naming the field and change nothing.
+        """
+        candidate = self.candidate(candidate_id)
+        f = FieldReader(f"{CANDIDATES_FOLDER}/{candidate.id}.yaml")
+        gate = gate_data(
+            f, reviewer=reviewer, on=on, checklist=checklist, passed=passed,
+            clearance=clearance,
+        )
+        gated = self._write(candidate, gate=gate)
+        self._reload_candidates()
+        if not gated.gate_passed:
+            self.log_verdict(self.gate_verdict(gated.id), on=on)
+        return self.candidate(gated.id)
 
     def _write(self, candidate: Candidate, **changes: Any) -> Candidate:
         data = candidate_data(candidate)

@@ -34,6 +34,8 @@ CANDIDATE_FIELDS = (
     "baseline",
     "gate",
 )
+# The Gate checklist a reviewer fills in (ADR-0005).
+GATE_CHECKLIST = ("retention", "sso", "enterprise_terms", "connector_support")
 GATE_FIELDS = (
     "reviewer",
     "date",
@@ -164,6 +166,29 @@ def candidate_data(c: Candidate) -> dict[str, Any]:
         "clearance": None if c.gate.clearance is None else str(c.gate.clearance),
     }
     return data
+
+
+def gate_data(
+    f: FieldReader,
+    *,
+    reviewer: str,
+    on: datetime.date,
+    checklist: dict[str, Any],
+    passed: bool,
+    clearance: Clearance | str | None,
+) -> dict[str, Any]:
+    """A Gate record as a Candidate file holds it; the checklist must hold exactly
+    GATE_CHECKLIST. Field values are checked when the Candidate is parsed."""
+    f.exact_keys(f.mapping(checklist, "gate"), "gate", GATE_CHECKLIST)
+    if not passed and clearance is not None:
+        raise f.fail("gate.clearance", "a failed Gate grants no Clearance; pass None")
+    return {
+        "reviewer": reviewer,
+        "date": on.isoformat(),
+        **{item: checklist[item] for item in GATE_CHECKLIST},
+        "result": "pass" if f.boolean(passed, "gate.result") else "fail",
+        "clearance": None if clearance is None else str(clearance),
+    }
 
 
 def _load(root: Path, path: Path) -> Candidate:

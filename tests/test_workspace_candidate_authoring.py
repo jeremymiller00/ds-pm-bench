@@ -110,3 +110,78 @@ def test_an_invalid_new_candidate_names_the_field_and_writes_nothing(
     assert err.value.field == field
     assert not list(workspace_dir.glob("candidates/*.yaml"))
     assert ws.candidates == ()
+
+
+def test_a_passing_gate_is_recorded_with_its_clearance(workspace_dir: Path):
+    ws = Workspace.open(workspace_dir)
+    c = new_candidate(ws)
+
+    gated = ws.record_gate(
+        c.id,
+        reviewer="J. Reviewer",
+        on=DAY,
+        checklist=CHECKLIST,
+        passed=True,
+        clearance="public_only",
+    )
+
+    assert gated.id == c.id
+    assert gated.gate_passed and gated.clearance == "public_only"
+    assert (gated.gate.reviewer, gated.gate.date) == ("J. Reviewer", DAY)
+    assert gated.gate.retention == "30 days, no training"
+    assert (gated.gate.sso, gated.gate.enterprise_terms) == (True, True)
+    assert gated.gate.connector_support == "None needed"
+    assert Workspace.open(workspace_dir).candidate(c.id) == gated
+    assert ws.decision_log() == ()
+
+
+def test_a_failed_gate_logs_a_reject_verdict(workspace_dir: Path):
+    ws = Workspace.open(workspace_dir)
+    baseline = new_candidate(ws)
+    other = new_candidate(ws, tool="Other", version="1", baseline=False)
+
+    failed = ws.record_gate(
+        other.id,
+        reviewer="J. Reviewer",
+        on=DAY,
+        checklist={**CHECKLIST, "sso": False},
+        passed=False,
+        clearance=None,
+    )
+
+    assert failed.gate.result == "fail" and failed.clearance is None
+    [entry] = ws.decision_log()
+    assert entry["date"] == "2026-11-13"
+    assert entry["verdict"] == "reject"
+    assert entry["candidate"] == {"id": "other@1", "version": "1"}
+    assert entry["baseline"]["id"] == baseline.id
+    assert entry["rationale"] == ["Gate: its Gate failed, so other@1 cannot be Run or adopted"]
+
+
+@pytest.mark.parametrize(
+    "passed, clearance, checklist, field",
+    [
+        (True, None, CHECKLIST, "gate.clearance"),
+        (True, "everything", CHECKLIST, "gate.clearance"),
+        (False, "public_only", CHECKLIST, "gate.clearance"),
+        (True, "public_only", {**CHECKLIST, "sso": "yes"}, "gate.sso"),
+        (True, "public_only", {k: v for k, v in CHECKLIST.items() if k != "retention"},
+         "gate.retention"),
+        (True, "public_only", {**CHECKLIST, "vibes": "good"}, "gate.vibes"),
+    ],
+    ids=["pass-without-clearance", "unknown-clearance", "fail-with-clearance",
+         "sso-not-bool", "missing-retention", "unknown-checklist-item"],
+)
+def test_an_invalid_gate_names_the_field_and_changes_nothing(
+    workspace_dir: Path, passed, clearance, checklist, field
+):
+    ws = Workspace.open(workspace_dir)
+    c = new_candidate(ws)
+
+    with pytest.raises(ConfigError) as err:
+        ws.record_gate(c.id, reviewer="J. Reviewer", on=DAY, checklist=checklist,
+                       passed=passed, clearance=clearance)
+
+    assert err.value.field == field
+    assert Workspace.open(workspace_dir).candidate(c.id).gate is None
+    assert ws.decision_log() == ()
