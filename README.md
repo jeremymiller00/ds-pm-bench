@@ -58,6 +58,7 @@ the API call's latency and cost. The live smoke tests are skipped unless you opt
 
 ```sh
 BENCH_LIVE=1 ANTHROPIC_API_KEY=... BENCH_LIVE_ANTHROPIC_MODEL=<model id> uv run pytest -m live
+BENCH_LIVE=1 OPENAI_API_KEY=... uv run pytest -m live  # also judges examples/ once
 ```
 
 In the TUI's Tasks tab, `e` edits the highlighted Task and `n` scaffolds a new one
@@ -157,18 +158,24 @@ Runs unless `--judge-setup-hash` is given.
 
 ### Judge Setup
 
-`config/judge.yaml` names the Judge Setup (ADR 0002, 0003):
+`config/judge.yaml` names the Judge Setup (ADR 0002, 0003). The committed default is
+a single public-only OpenAI Judge (non-Claude, so Claude as Baseline is never judged by
+its own family) with the versioned prompt in `config/judge/prompt.md`:
 
 ```yaml
-mode: panel                  # single: exactly one model; panel: two or more
+mode: single                 # single: exactly one model; panel: two or more
 clearance: public_only       # or public_and_private, to judge Private Tasks
 prompt: config/judge/prompt.md
 models:
-  - {provider: openai, model: gpt-6}
-  - {provider: google, model: gemini-4}
-  # family: [chatbot]        # optional: Candidate tools of this model's family
+  - provider: openai         # openai or anthropic
+    model: gpt-6-astra
+    env_var: OPENAI_API_KEY  # optional, default <PROVIDER>_API_KEY; env, else .env
+  # - {provider: anthropic, model: ..., family: [chatbot]}
+  #   family: optional, the Candidate tools of this model's family
 ```
 
+Each Judge is asked for JSON in its provider's structured-output mode (a JSON Schema
+naming every Criterion). The key's `env_var` is not part of the hash.
 Its hash covers the models and the prompt, so editing either is a new Judge Setup.
 `Workspace.judge_run(run, allow_uncertified=True)` scores every recorded, unscored
 Output blind; until certification lands every Judge Setup is uncertified, so the

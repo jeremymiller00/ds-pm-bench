@@ -55,7 +55,7 @@ from bench.core.kinds import AdapterKind, Clearance, Suite, Visibility
 from bench.core.lookup import find_by_id
 from bench.core.manual_time import ManualTimeStopwatch
 from bench.core.prices import PriceTable, load_prices
-from bench.core.providers import candidate_adapter
+from bench.core.providers import candidate_adapter, judge_model
 from bench.core.results import TaskResult
 from bench.core.rubric import Rubric, load_rubric
 from bench.core.runs import (
@@ -105,7 +105,7 @@ class Workspace:
     editor: Editor
     candidate_adapters: AdapterFactory
     judge_setup: JudgeSetup | None  # config/judge.yaml; None when absent
-    judges: JudgeModels | None  # the JudgeModel for each judge model; None, no judging
+    judges: JudgeModels  # the JudgeModel for each judge model of the Judge Setup
 
     @classmethod
     def open(
@@ -117,8 +117,9 @@ class Workspace:
         candidate_adapters: AdapterFactory | None = None,
         judges: JudgeModels | None = None,
     ) -> Workspace:
-        """candidate_adapters defaults to the provider SDK Adapters (bench.core.providers),
-        reading API keys from the environment or the root's .env."""
+        """candidate_adapters and judges default to the provider SDK Adapters and
+        JudgeModels (bench.core.providers), reading API keys from the environment or
+        the root's .env."""
         root = Path(path).resolve()
         settings = load_settings(root)
         rubric = load_rubric(root)
@@ -134,7 +135,7 @@ class Workspace:
             editor=editor or ExternalEditor(),
             candidate_adapters=candidate_adapters or (lambda c: candidate_adapter(c, root)),
             judge_setup=load_judge_setup(root),
-            judges=judges,
+            judges=judges or (lambda spec: judge_model(spec, root)),
         )
 
     @property
@@ -603,9 +604,10 @@ class Workspace:
         never the Candidate. A panel's median per Criterion becomes the Criterion
         scores; every Judge's scores and reasons are saved (Run.record_judging).
 
-        Refused before any Judge is called: no Judge Setup or judge models
-        (JudgeUnavailable); an uncertified Judge Setup without allow_uncertified
-        (JudgeNotCertified; certification arrives in slice 5); a Run already judged by
+        Refused before any Judge is called: no Judge Setup, or a judge model that
+        cannot be made (JudgeUnavailable, or MissingSecret for its API key); an
+        uncertified Judge Setup without allow_uncertified (JudgeNotCertified;
+        certification arrives in slice 5); a Run already judged by
         another Judge Setup (JudgeSetupMismatch); a Judge that is the
         Candidate under test (JudgeRefused); a Private Task to a Judge Setup without
         private Clearance (ClearanceError). Each allowed override is appended to the
@@ -616,8 +618,6 @@ class Workspace:
         setup = self.judge_setup
         if setup is None:
             raise JudgeUnavailable(f"no Judge Setup: {JUDGE_FILE} is missing")
-        if self.judges is None:
-            raise JudgeUnavailable("no judge models were given to the Workspace")
         if not allow_uncertified:
             raise JudgeNotCertified(
                 f"Judge Setup {setup.hash} is not certified; pass allow_uncertified=True "
@@ -644,9 +644,9 @@ class Workspace:
                     f"Task {task.id} is private and Judge Setup {setup.hash} is cleared "
                     f"for {setup.clearance}"
                 )
+        models = {spec.label: self.judges(spec) for spec in setup.models}
         log_override(self.root, self.clock.today(), run.id, candidate.id, setup.hash)
         family = any(same_family(spec, candidate.tool) for spec in setup.models)
-        models = {spec.label: self.judges(spec) for spec in setup.models}
         judged = []
         for task in tasks:
             request = JudgeRequest(

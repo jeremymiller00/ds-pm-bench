@@ -23,8 +23,15 @@ import openai
 from bench.core.adapters import CandidateAdapter, CandidateReply
 from bench.core.automated import model_for
 from bench.core.candidates import CANDIDATES_FOLDER, Candidate
-from bench.core.errors import CandidateToolError, MissingSecret
+from bench.core.errors import (
+    CandidateToolError,
+    JudgeReplyError,
+    JudgeUnavailable,
+    MissingSecret,
+)
 from bench.core.fields import FieldReader
+from bench.core.judging import JudgeModel, JudgeModelSpec, JudgeRequest
+from bench.core.rubric import Criterion
 
 ANTHROPIC = "anthropic"
 OPENAI = "openai"
@@ -92,6 +99,97 @@ class OpenAIAdapter:
         )
 
 
+def reply_schema(criteria: tuple[Criterion, ...]) -> dict[str, Any]:
+    """REPLY_FORMAT as a JSON Schema both providers enforce: every Criterion, nothing
+    else, a whole-number score 1-5 and a reason."""
+    entry = {
+        "type": "object",
+        "properties": {
+            "score": {"type": "integer", "enum": [1, 2, 3, 4, 5]},
+            "reason": {"type": "string"},
+        },
+        "required": ["score", "reason"],
+        "additionalProperties": False,
+    }
+    ids = [c.id for c in criteria]
+    return {
+        "type": "object",
+        "properties": {"scores": {
+            "type": "object",
+            "properties": {cid: entry for cid in ids},
+            "required": ids,
+            "additionalProperties": False,
+        }},
+        "required": ["scores"],
+        "additionalProperties": False,
+    }
+
+
+class OpenAIJudge:
+    """Sends the rendered JudgeRequest to the Responses API with a strict JSON Schema."""
+
+    def __init__(self, client: openai.OpenAI, model: str, **options: Any) -> None:
+        self.client = client
+        self.model = model
+        self.options = options
+
+    def judge(self, request: JudgeRequest) -> str:
+        try:
+            response = self.client.responses.create(
+                model=self.model,
+                input=request.render(),
+                text={"format": {
+                    "type": "json_schema", "name": "judge_scores",
+                    "schema": reply_schema(request.criteria), "strict": True,
+                }},
+                **self.options,
+            )
+        except openai.APIError as exc:
+            raise JudgeUnavailable(
+                f"Judge openai/{self.model}: OpenAI {type(exc).__name__}: {exc}"
+            ) from exc
+        if response.status != "completed":
+            raise JudgeReplyError(
+                f"Judge openai/{self.model}: reply is {response.status} "
+                f"({response.incomplete_details})"
+            )
+        if not response.output_text:
+            raise JudgeReplyError(f"Judge openai/{self.model}: reply has no text")
+        return response.output_text
+
+
+class AnthropicJudge:
+    """Sends the rendered JudgeRequest as one user message, with a JSON Schema output."""
+
+    def __init__(self, client: anthropic.Anthropic, model: str, **options: Any) -> None:
+        self.client = client
+        self.model = model
+        self.options = {"max_tokens": DEFAULT_MAX_TOKENS, **options}
+
+    def judge(self, request: JudgeRequest) -> str:
+        try:
+            response = self.client.messages.create(
+                model=self.model,
+                messages=[{"role": "user", "content": request.render()}],
+                output_config={"format": {
+                    "type": "json_schema", "schema": reply_schema(request.criteria),
+                }},
+                **self.options,
+            )
+        except anthropic.APIError as exc:
+            raise JudgeUnavailable(
+                f"Judge anthropic/{self.model}: Anthropic {type(exc).__name__}: {exc}"
+            ) from exc
+        if response.stop_reason != "end_turn":
+            raise JudgeReplyError(
+                f"Judge anthropic/{self.model}: reply stopped on {response.stop_reason}"
+            )
+        text = "".join(b.text for b in response.content if b.type == "text")
+        if not text:
+            raise JudgeReplyError(f"Judge anthropic/{self.model}: reply has no text")
+        return text
+
+
 def provider_for(candidate: Candidate) -> str:
     f = _reader(candidate)
     if "provider" in candidate.settings:
@@ -131,6 +229,20 @@ def candidate_adapter(candidate: Candidate, root: Path) -> CandidateAdapter:
         return AnthropicAdapter(anthropic.Anthropic(api_key=key, max_retries=0), model,
                                 **options)
     return OpenAIAdapter(openai.OpenAI(api_key=key, max_retries=0), model, **options)
+
+
+def judge_model(spec: JudgeModelSpec, root: Path) -> JudgeModel:
+    """The SDK JudgeModel for a judge model of the Judge Setup, its API key read from
+    spec.env_var per ADR-0005."""
+    if spec.provider not in PROVIDERS:
+        raise JudgeUnavailable(
+            f"Judge {spec.label}: no judge model for provider {spec.provider!r}; "
+            f"use one of {', '.join(PROVIDERS)}"
+        )
+    key = read_secret(spec.env_var, root)
+    if spec.provider == ANTHROPIC:
+        return AnthropicJudge(anthropic.Anthropic(api_key=key, max_retries=0), spec.model)
+    return OpenAIJudge(openai.OpenAI(api_key=key, max_retries=0), spec.model)
 
 
 def _reader(candidate: Candidate) -> FieldReader:

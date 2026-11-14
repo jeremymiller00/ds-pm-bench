@@ -1,0 +1,13 @@
+# The Judge Setup (ADR-0002, ADR-0003). Its hash covers the models and the prompt
+# file's text, so editing either makes a new Judge Setup; a Run is scored by one.
+#
+# A single non-Claude Judge, so Claude as Baseline is never judged by its own family.
+# The model id is from OpenAI's model docs (developers.openai.com/api/docs/models);
+# change it here when a newer flagship ships.
+mode: single                 # single: exactly one model; panel: two or more
+clearance: public_only       # public_and_private lets it judge Private Tasks (ADR-0006)
+prompt: config/judge/prompt.md
+models:
+  - provider: openai
+    model: gpt-6-astra
+    env_var: OPENAI_API_KEY  # where its API key is read from: env, else .env (ADR-0005)
