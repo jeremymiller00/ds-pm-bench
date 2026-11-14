@@ -10,7 +10,7 @@ from textual.widgets import Static, Tree
 
 from bench.core.tasks import Task
 from bench.core.workspace import Workspace
-from bench.tui.task_editor import TaskEditorScreen
+from bench.tui.task_editor import NewTaskScreen, TaskEditorScreen
 
 
 class TaskBrowser(Vertical):
@@ -19,7 +19,10 @@ class TaskBrowser(Vertical):
     TaskBrowser #task-details-pane { width: 2fr; padding: 0 1; }
     TaskBrowser #task-status { height: auto; padding: 0 1; }
     """
-    BINDINGS = [Binding("e", "edit_task", "Edit Task")]
+    BINDINGS = [
+        Binding("e", "edit_task", "Edit Task"),
+        Binding("n", "new_task", "New Task"),
+    ]
 
     def __init__(self, workspace: Workspace) -> None:
         super().__init__()
@@ -78,6 +81,16 @@ class TaskBrowser(Vertical):
                 self._status(f"{task.id} saved as v{task.version} (edited in place).")
 
         self.app.push_screen(TaskEditorScreen(self.workspace, task_id), saved)
+
+    def action_new_task(self) -> None:
+        def created(task: Task | None) -> None:
+            if task is not None:
+                self.refresh_tasks(select=task.id)
+                self._status(
+                    f"{task.id} created as v{task.version} {task.visibility} in {task.folder}."
+                )
+
+        self.app.push_screen(NewTaskScreen(self.workspace), created)
 
     def _status(self, message: str) -> None:
         self.query_one("#task-status", Static).update(message)

@@ -3,12 +3,12 @@
 from pathlib import Path
 
 import pytest
-from textual.widgets import Static, TabbedContent, Tabs, TextArea, Tree
+from textual.widgets import Select, Static, TabbedContent, Tabs, TextArea, Tree
 
 from bench import Workspace
 from bench.cli import main
 from bench.tui.app import BenchApp
-from bench.tui.task_editor import TaskEditorScreen
+from bench.tui.task_editor import NewTaskScreen, TaskEditorScreen
 from test_workspace_candidates import write_candidate
 from test_workspace_runs import cleared
 
@@ -250,3 +250,81 @@ async def test_cancelling_an_edit_leaves_the_task_as_it_was(workspace_dir: Path)
         assert not isinstance(app.screen, TaskEditorScreen)
 
     assert (folder / "task.md").read_text() == before
+
+
+NEW_CRITERIA = (
+    "- id: names_the_decision\n"
+    "  name: Names the decision\n"
+    "  description: States which decision the model output will inform.\n"
+)
+
+
+async def fill_new_task(
+    app: BenchApp, pilot, task_id: str, *, where: str | None = None
+) -> None:
+    await pilot.press("n")
+    await pilot.pause()
+    assert isinstance(app.screen, NewTaskScreen)
+    app.screen.query_one("#new-track", Select).value = "Specs"
+    if where is not None:
+        app.screen.query_one("#new-root", Select).value = where
+    fill(app, "#new-id", task_id)
+    fill(app, "#new-trap", "Writes a spec with no success criteria.")
+    fill(app, "#new-prompt", "Write a one-page spec.")
+    fill(app, "#new-criteria", NEW_CRITERIA)
+    await pilot.press("ctrl+s")
+    await pilot.pause()
+
+
+async def test_a_new_public_task_is_scaffolded_and_shown_in_its_track(workspace_dir: Path):
+    app = BenchApp(Workspace.open(workspace_dir))
+    async with app.run_test() as pilot:
+        await fill_new_task(app, pilot, "T2.1")
+        assert not isinstance(app.screen, NewTaskScreen)
+        assert tree_outline(app)["Specs (1)"] == [
+            "T2.1  public  v1  placeholder: input, Gold Answer, Manual Time"
+        ]
+        status = str(app.query_one("#task-status", Static).content)
+
+    assert "T2.1 created" in status
+    task = Workspace.open(workspace_dir).task("T2.1")
+    assert task.folder == workspace_dir.resolve() / "tasks" / "T2.1"
+    assert (task.track, task.trap) == ("Specs", "Writes a spec with no success criteria.")
+
+
+async def test_private_is_offered_only_when_a_private_root_is_configured(
+    workspace_dir: Path, tmp_path: Path
+):
+    app = BenchApp(Workspace.open(workspace_dir))
+    async with app.run_test() as pilot:
+        await pilot.press("n")
+        await pilot.pause()
+        assert isinstance(app.screen, NewTaskScreen)
+        assert not app.screen.query("#new-root")  # nowhere private to put it
+
+    private = tmp_path / "private"
+    private.mkdir()
+    configure_private_root(workspace_dir, private)
+    app = BenchApp(Workspace.open(workspace_dir))
+    async with app.run_test() as pilot:
+        await fill_new_task(app, pilot, "T2.1", where=str(private))
+        assert tree_outline(app)["Specs (1)"][0].startswith("T2.1  private  v1")
+
+    assert (private / "tasks" / "T2.1" / "task.md").is_file()
+
+
+async def test_a_new_task_the_workspace_refuses_is_shown_inline(workspace_dir: Path):
+    write_task(workspace_dir, "T2.1", track="Specs")
+
+    app = BenchApp(Workspace.open(workspace_dir))
+    async with app.run_test() as pilot:
+        await fill_new_task(app, pilot, "T2.1")
+        assert isinstance(app.screen, NewTaskScreen)
+        first = str(app.screen.query_one("#new-error", Static).content)
+        fill(app, "#new-id", "Task two")
+        await pilot.press("ctrl+s")
+        await pilot.pause()
+        second = str(app.screen.query_one("#new-error", Static).content)
+
+    assert "already exists" in first
+    assert "id" in second and "T<track>.<n>" in second
