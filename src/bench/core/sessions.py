@@ -10,7 +10,10 @@ Abandoning records nothing, so the Task can be begun again until it is finished.
 
 from __future__ import annotations
 
+import dataclasses
+
 from bench.core.adapters import Clock, Editor
+from bench.core.candidates import Candidate
 from bench.core.runs import OutputRecord, Run
 
 
@@ -85,7 +88,7 @@ class ManualSession:
             final=self.draft if final is None else final,
             active_seconds=self.active_seconds,
             latency_seconds=self.latency_seconds,
-            cost_usd=None,
+            cost_usd=flat_cost_usd(self.run.candidate),
         )
         self._over = "finished"
         return record
@@ -104,3 +107,19 @@ class ManualSession:
         if self.raw is None:
             raise ValueError(f"Task {self.task_id}: submit the raw Output before you {action}")
         return self.raw
+
+
+def flat_cost_usd(candidate: Candidate) -> float | None:
+    """The Candidate's flat per-Task cost in USD, or None when it has none.
+
+    Read generically, as the one Candidate field whose name mentions cost, so this
+    does not depend on how Candidate authoring names it.
+    """
+    costs = [
+        getattr(candidate, f.name)
+        for f in dataclasses.fields(candidate)
+        if "cost" in f.name
+    ]
+    if len(costs) > 1:
+        raise ValueError(f"Candidate {candidate.id} has more than one cost field")
+    return None if not costs or costs[0] is None else float(costs[0])

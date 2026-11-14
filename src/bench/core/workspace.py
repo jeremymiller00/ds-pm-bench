@@ -162,6 +162,11 @@ class Workspace:
         self._reload_tasks()
         return edited
 
+    def record_manual_time(self, task_id: str, minutes: int | float) -> Task:
+        """Record how long a person takes on the Task by hand, for the Time-saved
+        Dimension; an edit like any other (update_task)."""
+        return self.update_task(task_id, manual_time_minutes=minutes)
+
     def scaffold_catalog(self, private_root: str | Path) -> tuple[Task, ...]:
         """Create the 12 catalog Tasks as Private Tasks in a configured private root.
 

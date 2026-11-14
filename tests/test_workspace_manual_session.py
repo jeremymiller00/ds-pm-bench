@@ -1,3 +1,4 @@
+import dataclasses
 import datetime
 from pathlib import Path
 
@@ -5,6 +6,7 @@ import pytest
 import yaml
 
 from bench import ClearanceError, Workspace
+from bench.core.candidates import Candidate
 from test_workspace_candidates import candidate, write_candidate
 from test_workspace_tasks import configure_private_root, write_task
 
@@ -237,3 +239,34 @@ def test_a_private_task_is_refused_before_any_content_is_shown(
             ws.begin_manual_task(run, "T3.1")
     finally:
         (private / "tasks" / "T3.1" / "input.md").chmod(0o644)
+
+
+@dataclasses.dataclass(frozen=True)
+class FlatCostCandidate(Candidate):
+    """A Candidate with a flat per-Task cost, as Candidate authoring (#15) adds."""
+
+    cost_per_task_usd: float | None = None
+
+
+def test_a_candidates_flat_per_task_cost_is_the_tasks_cost(ws_dir: Path, clock: FakeClock):
+    ws = open_ws(ws_dir, clock)
+    ws.candidates = tuple(
+        FlatCostCandidate(**vars(c), cost_per_task_usd=0.75) for c in ws.candidates
+    )
+    run = ws.start_run(CANDIDATE, on=DAY)
+    session = ws.begin_manual_task(run, "T1.1")
+    session.submit_raw("raw")
+
+    assert session.finish().cost_usd == 0.75
+    assert results(ws_dir, run.id, "T1.1")["cost_usd"] == 0.75
+
+
+def test_manual_time_is_recorded_on_the_task(ws_dir: Path, clock: FakeClock):
+    write_task(ws_dir, "T2.1", track="Specs", manual_time="null")
+    ws = open_ws(ws_dir, clock)
+    assert "Manual Time" in ws.task("T2.1").placeholders
+
+    task = ws.record_manual_time("T2.1", 38.5)
+
+    assert task.manual_time_minutes == 38.5
+    assert Workspace.open(ws_dir).task("T2.1").placeholders == ()
