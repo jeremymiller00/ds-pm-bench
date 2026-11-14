@@ -19,7 +19,8 @@ from typing import Any
 import yaml
 
 from bench.core.fields import FieldReader
-from bench.core.kinds import AdapterKind, Clearance
+from bench.core.kinds import AdapterKind, Clearance, Provider
+from bench.core.provider_registry import provider_of_tool
 
 CANDIDATES_FOLDER = "candidates"
 
@@ -145,6 +146,22 @@ class Candidate:
     def clearance(self) -> Clearance | None:
         """The Clearance a passing Gate grants; None without one."""
         return self.gate.clearance if self.gate_passed else None
+
+
+def model_for(candidate: Candidate) -> str:
+    """The model id an automated Candidate calls: settings.model, else its version."""
+    return str(candidate.settings.get("model") or candidate.version)
+
+
+def provider_for(candidate: Candidate) -> Provider | None:
+    """The provider a Candidate calls: settings.provider, else the one its tool names;
+    None when neither names a known provider."""
+    if "provider" in candidate.settings:
+        try:
+            return Provider(str(candidate.settings["provider"]).strip().lower())
+        except ValueError:
+            return None
+    return provider_of_tool(candidate.tool)
 
 
 def load_candidates(root: Path) -> tuple[Candidate, ...]:

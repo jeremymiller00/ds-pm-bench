@@ -37,6 +37,7 @@ from bench.core.errors import (
 from bench.core.kinds import Suite
 from bench.core.verdicts import Verdict
 from bench.core.workspace import Workspace
+from bench.wiring import open_workspace
 
 # Refusals the CLI reports as one line rather than a traceback. ConfigError and the
 # Unknown*Error lookups are ValueError and LookupError subclasses.
@@ -57,7 +58,7 @@ _REFUSALS = (
 def main(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     try:
-        ws = Workspace.open(args.workspace)
+        ws = open_workspace(args.workspace)
         return args.command(ws, args)
     except (OSError, yaml.YAMLError) as error:
         print(f"bench: {error}", file=sys.stderr)
@@ -110,14 +111,17 @@ def _verdict(ws: Workspace, args: argparse.Namespace) -> int:
         if args.runs:
             raise ValueError("--gate takes no Runs")
         verdict = ws.gate_verdict(args.gate)
+        judge_setup_hash = args.judge_setup_hash
     else:
         if len(args.runs) != 2:
             raise ValueError("give CHALLENGER_RUN and BASELINE_RUN, or --gate CANDIDATE")
         challenger, baseline = args.runs
-        verdict = ws.compare(challenger, baseline).verdict
+        comparison = ws.compare(challenger, baseline)
+        verdict = comparison.verdict
+        judge_setup_hash = args.judge_setup_hash or comparison.judge_setup_hash
     _print_verdict(verdict)
     if args.log:
-        path = ws.log_verdict(verdict, on=args.on, judge_setup_hash=args.judge_setup_hash)
+        path = ws.log_verdict(verdict, on=args.on, judge_setup_hash=judge_setup_hash)
         print(f"logged: {path.relative_to(ws.root)}")
     return 0
 
@@ -200,7 +204,10 @@ def _parser() -> argparse.ArgumentParser:
     verdict.add_argument("--gate", metavar="CANDIDATE", help="reject a Candidate whose Gate failed")
     verdict.add_argument("--log", action="store_true", help="append it to the Decision Log")
     verdict.add_argument("--on", type=_date, help="the Decision Log date (default: today)")
-    verdict.add_argument("--judge-setup-hash", help="Judge setup recorded with the entry")
+    verdict.add_argument(
+        "--judge-setup-hash",
+        help="Judge Setup recorded with the entry; defaults to the one that scored both Runs",
+    )
     verdict.set_defaults(command=_verdict)
 
     catalog = commands.add_parser(

@@ -276,3 +276,31 @@ def test_a_private_root_inside_the_public_workspace_is_refused(
 
     assert (err.value.file, err.value.field) == ("config/local.yaml", "private_roots[0]")
     assert "inside the public Workspace" in err.value.message
+
+
+# Pinned: editing the default judge.yaml models or prompt makes a new Judge Setup
+# (ADR-0003), so this changes only on purpose.
+DEFAULT_JUDGE_SETUP_HASH = "7bae56d113f3e624"
+
+
+def test_the_default_judge_setup_is_one_public_only_openai_judge(workspace_dir: Path):
+    setup = Workspace.open(workspace_dir).judge_setup
+
+    assert setup.mode == "single" and setup.clearance == "public_only"
+    [spec] = setup.models
+    assert (spec.provider, spec.model, spec.env_var) == (
+        "openai", "gpt-6-astra", "OPENAI_API_KEY"
+    )
+    assert "claude" not in spec.family  # Claude as Baseline is never self-judged
+    assert setup.prompt_file == "config/judge/prompt.md"
+    assert "Version: 2" in setup.prompt
+    assert setup.hash == DEFAULT_JUDGE_SETUP_HASH
+
+
+def test_the_default_judge_prompt_is_blind_and_fails_invented_facts(workspace_dir: Path):
+    prompt = Workspace.open(workspace_dir).judge_setup.prompt.lower()
+
+    assert "gold answer" in prompt and "rubric" in prompt
+    assert "1 to 5" in prompt and "one line" in prompt
+    assert "invent" in prompt and "correctness" in prompt
+    assert "candidate" not in prompt  # the Judge is never told who wrote the Output

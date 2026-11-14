@@ -101,8 +101,12 @@ The numbers recorded for one Task in a Run: Criterion scores, Edit Distance, act
 _Avoid_: Result (alone), outcome
 
 **Attempt**:
-One manual-assisted pass at a Task within a Run, from showing the Canonical Prompt to saving the final. An Attempt can be abandoned, which records nothing.
+One pass at a Task within a Run, ending when the final is saved. For a manual-assisted Candidate it starts by showing the Canonical Prompt; for an automated one it starts with the raw Output already returned. An Attempt can be abandoned, which records nothing.
 _Avoid_: Session
+
+**Returned Output**:
+The raw Output an automated Candidate sent back for a Task, waiting for an Attempt to edit it into the final.
+_Avoid_: Pending output (pending names the Tasks a Run has not recorded)
 
 **Comparison**:
 A challenger Run paired with a Baseline Run from the same week, over the same Suite. The Verdict belongs to a Comparison, never to a single Run.
@@ -123,6 +127,10 @@ The dated, append-only record of Verdicts with their rationale.
 **Judge**:
 The model, or panel of models, that scores Outputs blind against the Rubric and Gold Answer. Never the Candidate under test.
 _Avoid_: Grader, evaluator
+
+**Panel**:
+A Judge made of two or more judge models, whose scores are combined by taking the median per Criterion. Each member is a judge model, never "a Judge".
+_Avoid_: Jury, ensemble
 
 **Judge Setup**:
 The Judge model or panel plus the judge prompt, identified by a content hash.

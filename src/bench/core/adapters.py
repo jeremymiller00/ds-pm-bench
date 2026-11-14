@@ -1,7 +1,9 @@
 """Adapter ports: the outward boundaries Workspace receives by injection (spec #1).
 
 Tests inject fakes; the real implementations below read the system clock and run the
-person's $EDITOR.
+person's $EDITOR. The real Candidate Adapters and judge models, which call a provider's
+API, are in bench.providers, wired in by the composition root (bench.wiring), so the
+core never imports a provider SDK.
 """
 
 from __future__ import annotations
@@ -12,10 +14,16 @@ import shlex
 import subprocess
 import tempfile
 import time
+from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Protocol
+from typing import TYPE_CHECKING, Protocol
 
 from bench.core.errors import EditorError
+
+if TYPE_CHECKING:
+    from bench.core.candidates import Candidate
+    from bench.core.judging import JudgeModelSpec, JudgeRequest
 
 
 class Clock(Protocol):
@@ -33,6 +41,38 @@ class Editor(Protocol):
     EditorError if it cannot."""
 
     def edit(self, text: str) -> str: ...
+
+
+@dataclass(frozen=True)
+class CandidateReply:
+    """What an automated Candidate returned for one prompt: its raw Output and the
+    tokens the provider counted."""
+
+    text: str
+    input_tokens: int
+    output_tokens: int
+
+
+class CandidateAdapter(Protocol):
+    """Sends text to an automated Candidate, word for word, and returns its reply.
+
+    Raises CandidateToolError when the tool errors (API error, timeout, refusal to
+    answer); the caller decides whether to retry, so an Adapter never retries itself.
+    """
+
+    def send(self, text: str) -> CandidateReply: ...
+
+
+class JudgeModel(Protocol):
+    """A judge model call: returns the model's reply text to a JudgeRequest."""
+
+    def judge(self, request: JudgeRequest) -> str: ...
+
+
+# What Workspace receives by injection: the Candidate Adapter for an automated
+# Candidate, and the JudgeModel for each judge model of a Judge Setup.
+type AdapterFactory = Callable[[Candidate], CandidateAdapter]
+type JudgeModels = Callable[[JudgeModelSpec], JudgeModel]
 
 
 class SystemClock:

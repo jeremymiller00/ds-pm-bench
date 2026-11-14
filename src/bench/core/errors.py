@@ -52,8 +52,9 @@ class SuiteUnavailable(Exception):
 
 
 class AttemptError(Exception):
-    """An Attempt refused an action: a Run whose Candidate is not manual-assisted, a Task
-    already recorded, a step out of order, or an Attempt already over."""
+    """An Attempt refused an action: a Run whose Candidate is the wrong kind of Adapter
+    for it, a Task already recorded or already holding a Returned Output, a step out of order,
+    or an Attempt already over."""
 
 
 class EditorError(Exception):
@@ -79,3 +80,53 @@ class RunIncomplete(Exception):
 
 class SuiteMismatch(Exception):
     """Two Runs cannot be compared: they do not cover the same Tasks at the same versions."""
+
+
+class JudgingError(Exception):
+    """Judging a Run was refused or failed; every judging error is one of these."""
+
+
+class RunNotFinished(JudgingError):
+    """A Run with pending Tasks cannot be judged; judge it once every Output is recorded."""
+
+
+class JudgeUnavailable(JudgingError):
+    """Judging cannot start: no Judge Setup in config/judge.yaml, no judge models given
+    to the Workspace, or a judge model that cannot be made (its API key missing, its
+    provider unsupported, or its API erroring)."""
+
+
+class JudgeNotCertified(JudgingError):
+    """The Judge Setup is not certified; judging needs an explicit, logged override."""
+
+
+class JudgeRefused(JudgingError):
+    """A judge model of the Judge Setup is the model the Candidate under test calls,
+    which would judge its own Output."""
+
+
+class JudgeClearanceError(JudgingError, ClearanceError):
+    """A Private Task refused to a Judge Setup without private Clearance (ADR-0006)."""
+
+
+class JudgeReplyError(JudgingError, ValueError):
+    """A judge model's reply is malformed: not JSON, a Criterion missing or unknown, a
+    score outside 1-5 or a reason that is not one line. Nothing is recorded for the Task."""
+
+
+class JudgeSetupMismatch(JudgingError):
+    """A Run already judged by one Judge Setup cannot be judged by another."""
+
+
+class CandidateToolError(Exception):
+    """An automated Candidate's tool errored: an API error, a timeout or no Output."""
+
+
+class CandidateUnavailable(Exception):
+    """An automated Candidate cannot be sent Tasks: the Workspace was opened without
+    Candidate Adapters."""
+
+
+class MissingSecret(Exception):
+    """A secret a Candidate needs is set neither in the environment nor in .env.
+    Names the environment variable, never a value (ADR-0005)."""

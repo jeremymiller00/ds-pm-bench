@@ -1,12 +1,17 @@
-"""An Attempt: one manual-assisted pass at a Task within a Run, from showing the
-Canonical Prompt to saving the final.
+"""An Attempt: one pass at a Task within a Run, ending when the final is saved.
 
-begin (Workspace.begin_manual_task; Clearance is checked first and the clock starts)
--> submit_raw (latency = start to paste) -> edit, in the TUI's built-in editor with
+Workspace.begin_attempt begins one after checking the Gate and Clearance, and the clock
+starts. For a manual-assisted Candidate it starts by showing the Canonical Prompt:
+submit_raw (latency = start to paste) -> edit, in the TUI's built-in editor with
 pause/resume or in $EDITOR via edit_externally (all its open time counts) -> finish
 (records raw, final, active seconds = start to save minus pauses, latency and cost).
 
-Abandoning records nothing, so the Task can be begun again until it is finished.
+For an automated Candidate it starts with the raw Output already returned (the Returned
+Output): active seconds are the editing time, and latency, cost, tokens, model and tries
+are the provider call's. Finishing removes the Returned Output.
+
+An Attempt can be abandoned, which records nothing, so the Task can be begun again until
+it is finished.
 """
 
 from __future__ import annotations
@@ -15,6 +20,7 @@ from collections.abc import Callable
 from enum import StrEnum
 
 from bench.core.adapters import Clock, Editor
+from bench.core.automated import ReturnedOutput, discard_returned
 from bench.core.errors import AttemptError
 from bench.core.runs import OutputRecord, Run
 
@@ -33,7 +39,8 @@ class Attempt:
         prompt: str,
         clock: Clock,
         editor: Editor,
-        check_permitted: Callable[[], None],
+        check_gate_and_clearance: Callable[[], None],
+        returned: ReturnedOutput | None = None,
     ) -> None:
         self.run = run
         self.task_id = task_id
@@ -42,7 +49,7 @@ class Attempt:
         self._editor = editor
         # Re-checks the Candidate's latest Gate and Clearance (ADR-0003): raises if a
         # review since begin has failed or narrowed it.
-        self._check_permitted = check_permitted
+        self._check_gate_and_clearance = check_gate_and_clearance
         self._started = clock.now()
         self._paused_seconds = 0.0
         self._paused_at: float | None = None
@@ -50,6 +57,11 @@ class Attempt:
         self.raw: str | None = None
         self.latency_seconds: float | None = None
         self.draft: str | None = None  # the latest edit; the raw Output until edited
+        # An automated Task's Returned Output: the Attempt starts with its raw Output in.
+        self._returned = returned
+        if returned is not None:
+            self.raw = self.draft = returned.raw
+            self.latency_seconds = returned.latency_seconds
 
     @property
     def paused(self) -> bool:
@@ -98,14 +110,15 @@ class Attempt:
             raise AttemptError(f"Task {self.task_id}: resume the paused timer before editing")
 
     def finish(self, final: str | None = None) -> OutputRecord:
-        """Save raw and final (the draft when final is omitted) with timings and cost.
+        """Save raw and final (the draft when final is omitted) with timings and cost,
+        and for an automated Candidate the provider call's model, tokens and tries.
 
         A pause still open at save time does not count as active time. The Attempt is
         then over. A Gate failed or narrowed since begin refuses the save
         (GateNotPassed, ClearanceError) and records nothing.
         """
         raw = self._need_raw("finish")
-        self._check_permitted()
+        self._check_gate_and_clearance()
         if self.task_id not in self.run.pending:
             raise AttemptError(f"Task {self.task_id}: its Output is already recorded")
         record = self.run.record_output(
@@ -114,10 +127,19 @@ class Attempt:
             final=self.draft if final is None else final,
             active_seconds=self.active_seconds,
             latency_seconds=self.latency_seconds,
-            cost_usd=self.run.candidate.task_cost_usd,
+            cost_usd=self._cost_usd,
+            call=None if self._returned is None else self._returned.call,
         )
+        if self._returned is not None:
+            discard_returned(self.run, self.task_id)
         self.state = AttemptState.FINISHED
         return record
+
+    @property
+    def _cost_usd(self) -> float | None:
+        if self._returned is not None:
+            return self._returned.cost_usd
+        return self.run.candidate.task_cost_usd
 
     def abandon(self) -> None:
         """Abandon the Attempt, recording nothing; the Task can be begun again."""

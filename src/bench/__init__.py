@@ -1,17 +1,39 @@
 """DS PM Benchmark core library."""
 
-from bench.core.adapters import Clock, Editor, ExternalEditor, SystemClock
+from bench.core.adapters import (
+    AdapterFactory,
+    CandidateAdapter,
+    CandidateReply,
+    Clock,
+    Editor,
+    ExternalEditor,
+    JudgeModel,
+    JudgeModels,
+    SystemClock,
+)
 from bench.core.attempts import Attempt
+from bench.core.automated import ReturnedOutput
 from bench.core.errors import (
     AttemptError,
     CandidateAuthoringError,
+    CandidateToolError,
+    CandidateUnavailable,
     ClearanceError,
     ConfigError,
     EditorError,
     GateNotPassed,
+    JudgeClearanceError,
+    JudgeNotCertified,
+    JudgeRefused,
+    JudgeReplyError,
+    JudgeSetupMismatch,
+    JudgeUnavailable,
+    JudgingError,
+    MissingSecret,
     RunExists,
     RunIncomplete,
     RunMismatch,
+    RunNotFinished,
     SuiteMismatch,
     SuiteUnavailable,
     TaskAuthoringError,
@@ -21,15 +43,26 @@ from bench.core.errors import (
     UnknownRunError,
     UnknownTaskError,
 )
+from bench.core.judging import (
+    JudgeModelSpec,
+    JudgeRequest,
+    JudgeSetup,
+    TaskJudging,
+)
 from bench.core.results import TaskResult
 from bench.core.scoring import RunScore, TaskScore
 from bench.core.verdicts import Comparison, Verdict
 from bench.core.workspace import Workspace
 
 __all__ = [
+    "AdapterFactory",
     "Attempt",
     "AttemptError",
+    "CandidateAdapter",
     "CandidateAuthoringError",
+    "CandidateReply",
+    "CandidateToolError",
+    "CandidateUnavailable",
     "Clock",
     "Comparison",
     "ClearanceError",
@@ -38,15 +71,31 @@ __all__ = [
     "EditorError",
     "ExternalEditor",
     "GateNotPassed",
+    "JudgeClearanceError",
+    "JudgeModel",
+    "JudgeModelSpec",
+    "JudgeModels",
+    "JudgeNotCertified",
+    "JudgeRefused",
+    "JudgeReplyError",
+    "JudgeRequest",
+    "JudgeSetup",
+    "JudgeSetupMismatch",
+    "JudgeUnavailable",
+    "JudgingError",
+    "MissingSecret",
+    "ReturnedOutput",
     "RunExists",
     "RunIncomplete",
     "RunMismatch",
+    "RunNotFinished",
     "RunScore",
     "SuiteMismatch",
     "SystemClock",
     "SuiteUnavailable",
     "TaskAuthoringError",
     "TaskEditRefused",
+    "TaskJudging",
     "TaskNotRunnable",
     "TaskResult",
     "TaskScore",

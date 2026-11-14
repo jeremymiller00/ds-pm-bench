@@ -4,13 +4,23 @@ from __future__ import annotations
 
 import datetime
 import shutil
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from bench.core.adapters import Clock, Editor, ExternalEditor, SystemClock
+from bench.core.adapters import (
+    AdapterFactory,
+    CandidateAdapter,
+    Clock,
+    Editor,
+    ExternalEditor,
+    JudgeModel,
+    JudgeModels,
+    SystemClock,
+)
 from bench.core.attempts import Attempt
+from bench.core.automated import ReturnedOutput, load_returned, run_task
 from bench.core.candidates import (
     CANDIDATES_FOLDER,
     Candidate,
@@ -18,23 +28,43 @@ from bench.core.candidates import (
     candidate_id_for,
     edit_refusal,
     load_candidates,
+    model_for,
     new_candidate_data,
     new_gate_review,
+    provider_for,
     review_data,
     write_candidate,
 )
 from bench.core.catalog import CATALOG
-from bench.core.decisions import log_verdict, read_log
+from bench.core.decisions import log_override, log_verdict, override_logged, read_log
 from bench.core.errors import (
     AttemptError,
     CandidateAuthoringError,
+    CandidateUnavailable,
     GateNotPassed,
+    JudgeClearanceError,
+    JudgeNotCertified,
+    JudgeRefused,
+    JudgeUnavailable,
+    MissingSecret,
+    RunNotFinished,
     TaskAuthoringError,
     TaskNotRunnable,
     UnknownCandidateError,
     UnknownTaskError,
 )
-from bench.core.kinds import AdapterKind, Clearance, Suite
+from bench.core.judging import (
+    JUDGE_FILE,
+    JudgeModelSpec,
+    JudgeRequest,
+    JudgeSetup,
+    TaskJudging,
+    is_candidate_under_test,
+    load_judge_setup,
+    parse_reply,
+    same_family,
+)
+from bench.core.kinds import AdapterKind, Clearance, Suite, Visibility
 from bench.core.lookup import find_by_id
 from bench.core.manual_time import ManualTimeStopwatch
 from bench.core.prices import PriceTable, load_prices
@@ -72,7 +102,10 @@ class Workspace:
     """Opened from the repo root holding config/, Tasks, Candidates and Runs.
 
     tasks is replaced when a Task is created or edited, candidates when a Candidate is.
-    clock and editor are the Adapters for timing and $EDITOR; tests inject fakes.
+    clock and editor are the Adapters for timing and $EDITOR, candidate_adapters
+    gives an automated Candidate its Adapter, and judges gives the JudgeModel for
+    each judge model of the Judge Setup; tests inject fakes, and the composition root
+    (bench.wiring.open_workspace) injects the provider SDKs.
     """
 
     root: Path
@@ -83,11 +116,23 @@ class Workspace:
     candidates: tuple[Candidate, ...]
     clock: Clock
     editor: Editor
+    candidate_adapters: AdapterFactory | None  # None: no automated Task can be sent
+    judge_setup: JudgeSetup | None  # config/judge.yaml; None when absent
+    judges: JudgeModels | None  # None: no Run can be judged
 
     @classmethod
     def open(
-        cls, path: str | Path, *, clock: Clock | None = None, editor: Editor | None = None
+        cls,
+        path: str | Path,
+        *,
+        clock: Clock | None = None,
+        editor: Editor | None = None,
+        candidate_adapters: AdapterFactory | None = None,
+        judges: JudgeModels | None = None,
     ) -> Workspace:
+        """Without candidate_adapters, sending an automated Task raises
+        CandidateUnavailable; without judges, judging raises JudgeUnavailable. Nothing
+        else needs them. bench.wiring.open_workspace passes the provider SDKs."""
         root = Path(path).resolve()
         settings = load_settings(root)
         rubric = load_rubric(root)
@@ -101,6 +146,9 @@ class Workspace:
             candidates=load_candidates(root),
             clock=clock or SystemClock(),
             editor=editor or ExternalEditor(),
+            candidate_adapters=candidate_adapters,
+            judge_setup=load_judge_setup(root),
+            judges=judges,
         )
 
     @property
@@ -475,31 +523,181 @@ class Workspace:
         check_clearance(candidate, task)
         return run.task_input(task_id)
 
-    def begin_manual_task(self, run: Run, task_id: str) -> Attempt:
-        """Begin working a Task of the Run by hand: returns the Attempt showing its
-        Canonical Prompt and input, with the clock started.
+    def begin_attempt(self, run: Run, task_id: str) -> Attempt:
+        """Begin an Attempt at a Task of the Run, the clock starting now.
 
-        Only a Run of a manual-assisted Candidate can be worked by hand (AttemptError).
-        The latest Gate and Clearance are checked before any content is read
-        (GateNotPassed, ClearanceError). A Task whose Output is already recorded cannot
-        be begun again (AttemptError).
+        For a manual-assisted Candidate it shows the Canonical Prompt and input and waits
+        for the raw Output to be pasted. For an automated one it starts with the Returned
+        Output already in (run_automated_task sends it first); finishing records its
+        tokens, model, tries, latency and cost and removes the Returned Output, while
+        abandoning keeps it for another Attempt.
+
+        The latest Gate and Clearance are checked before any content is read, and again
+        at finish (GateNotPassed, ClearanceError). A Task whose Output is already
+        recorded, or an automated Task with no Returned Output, raises AttemptError.
         """
+        prompt = self._unrecorded_task_input(run, task_id)
+        returned = None
         if not run.candidate.manual_assisted:
-            raise AttemptError(
-                f"Run {run.id}: Candidate {run.candidate_id} is {run.candidate.adapter}, "
-                f"so its Tasks cannot be worked by hand; only {AdapterKind.MANUAL_ASSISTED} "
-                "Candidates can"
-            )
+            returned = load_returned(run, task_id)
+            if returned is None:
+                raise AttemptError(
+                    f"Run {run.id}: Task {task_id} has no raw Output to edit; send it first"
+                )
+        return Attempt(run, task_id, prompt, self.clock, self.editor,
+                       self._gate_and_clearance_check(run, task_id), returned=returned)
+
+    def _unrecorded_task_input(self, run: Run, task_id: str) -> str:
+        """The Task's Canonical Prompt and input after the latest Gate and Clearance are
+        checked; AttemptError if its Output is already recorded."""
         prompt = self.task_input(run, task_id)
         if task_id not in run.pending:
             raise AttemptError(f"Run {run.id}: Task {task_id}'s Output is already recorded")
+        return prompt
 
-        def check_permitted() -> None:
+    def _gate_and_clearance_check(self, run: Run, task_id: str) -> Callable[[], None]:
+        def check_gate_and_clearance() -> None:
             candidate = self.candidate(run.candidate_id)  # its latest Gate review
             check_gate(candidate)
             check_clearance(candidate, self.task(task_id))
 
-        return Attempt(run, task_id, prompt, self.clock, self.editor, check_permitted)
+        return check_gate_and_clearance
+
+    def sendable_tasks(self, run: Run) -> tuple[str, ...]:
+        """Task ids of an automated Run that run_automated_task would send: not yet
+        recorded and with no Returned Output. None for a manual-assisted Run."""
+        if run.candidate.manual_assisted:
+            return ()
+        return tuple(t for t in run.pending if load_returned(run, t) is None)
+
+    def run_automated_task(self, run: Run, task_id: str) -> ReturnedOutput:
+        """Send a Task of an automated Run to its Candidate and store its Returned
+        Output for an Attempt to edit; returns it (see bench.core.automated).
+
+        The latest Gate and Clearance are checked before any content is read
+        (GateNotPassed, ClearanceError), and the Adapter is built (MissingSecret for an
+        unset API key) before anything is sent. The Canonical Prompt and input go word
+        for word; latency is the successful call's, timed with the Clock, and cost is
+        tokens times the price table, null with a note for a model it lacks. A tool
+        error is retried exactly once; a second raises CandidateToolError and stores
+        nothing. A manual-assisted Run, or a Task already recorded or already holding a
+        Returned Output, raises AttemptError.
+        """
+        if run.candidate.manual_assisted:
+            raise AttemptError(
+                f"Run {run.id}: Candidate {run.candidate_id} is {run.candidate.adapter}; "
+                f"only {AdapterKind.AUTOMATED} Candidates' Tasks can be sent automatically"
+            )
+        prompt = self._unrecorded_task_input(run, task_id)
+        if load_returned(run, task_id) is not None:
+            raise AttemptError(
+                f"Run {run.id}: Task {task_id} already has a Returned Output ready to edit"
+            )
+        adapter = self._candidate_adapter(run.candidate)
+        return run_task(run, task_id, prompt, adapter, self.clock, self.prices)
+
+    def returned_output(self, run: Run, task_id: str) -> ReturnedOutput | None:
+        """A Task's Returned Output, ready for an Attempt to edit, or None if it has none."""
+        return load_returned(run, task_id)
+
+    def _candidate_adapter(self, candidate: Candidate) -> CandidateAdapter:
+        if self.candidate_adapters is None:
+            raise CandidateUnavailable(
+                f"Candidate {candidate.id} cannot be sent Tasks: this Workspace was opened "
+                "without Candidate Adapters (open it with bench.wiring.open_workspace)"
+            )
+        return self.candidate_adapters(candidate)
+
+    def judge_run(self, run: Run, *, allow_uncertified: bool = False) -> tuple[TaskJudging, ...]:
+        """Score every Task of a finished Run whose Output is not yet scored.
+
+        Each judge model sees the input, the Rubric, the Gold Answer and the final
+        Output, never the Candidate. A Panel's median per Criterion becomes the Criterion
+        scores; every judge model's scores and reasons are saved (Run.record_judging).
+
+        Every refusal is a JudgingError, raised before any judge model is called: a Run
+        with pending Tasks (RunNotFinished); no Judge Setup, or a judge model that
+        cannot be made, its API key missing included (JudgeUnavailable); an uncertified
+        Judge Setup without allow_uncertified (JudgeNotCertified; Certification arrives
+        in slice 5); a Run already judged by another Judge Setup (JudgeSetupMismatch); a
+        judge model that is the model the Candidate calls (JudgeRefused); a Private Task
+        to a Judge Setup without private Clearance (JudgeClearanceError).
+
+        The uncertified override is appended to the Decision Log once the first Task is
+        judged, and only once per Run and Judge Setup, so a resumed judging logs nothing
+        new. A malformed reply raises JudgeReplyError; Tasks judged before it stay
+        recorded, so judging again resumes. A same-family judge model marks every Task
+        for a full human check.
+        """
+        setup = self.judge_setup
+        if setup is None:
+            raise JudgeUnavailable(f"no Judge Setup: {JUDGE_FILE} is missing")
+        if run.pending:
+            raise RunNotFinished(
+                f"Run {run.id} is not finished: {', '.join(run.pending)} still pending; "
+                "judge it once every Task's Output is recorded"
+            )
+        if not allow_uncertified:
+            raise JudgeNotCertified(
+                f"Judge Setup {setup.hash} is not certified; pass allow_uncertified=True "
+                "to judge anyway, which is logged to the Decision Log"
+            )
+        run.check_judge_setup(setup)
+        candidate = run.candidate
+        provider, model = provider_for(candidate), model_for(candidate)
+        for spec in setup.models:
+            if is_candidate_under_test(spec, provider, model):
+                raise JudgeRefused(
+                    f"judge model {spec.label} is the model Candidate {candidate.id} "
+                    "calls; a model never judges its own Output"
+                )
+        tasks = [run.task(task_id) for task_id in run.unjudged]
+        for task in tasks:  # before any content is read
+            if task.visibility == Visibility.PRIVATE and (
+                setup.clearance != Clearance.PUBLIC_AND_PRIVATE
+            ):
+                raise JudgeClearanceError(
+                    f"Task {task.id} is private and Judge Setup {setup.hash} is cleared "
+                    f"for {setup.clearance}"
+                )
+        models = {spec.label: self._judge_model(spec) for spec in setup.models}
+        family = any(same_family(spec, candidate.tool) for spec in setup.models)
+        judged = []
+        for task in tasks:
+            request = JudgeRequest(
+                prompt=setup.prompt,
+                input=f"{task.canonical_prompt}\n\n{task.input_path.read_text().strip()}",
+                criteria=task.rubric.criteria,
+                gold_answer=task.gold_answer_path.read_text(),
+                output=run.final_output(task.id),
+            )
+            judging = TaskJudging(
+                task_id=task.id,
+                judges={
+                    label: parse_reply(
+                        model.judge(request), request.criteria,
+                        f"judge model {label} on Task {task.id}",
+                    )
+                    for label, model in models.items()
+                },
+                same_family=family,
+            )
+            run.record_judging(judging, setup)
+            if not override_logged(self.root, run.id, setup.hash):
+                log_override(self.root, self.clock.today(), run.id, candidate.id, setup.hash)
+            judged.append(judging)
+        return tuple(judged)
+
+    def _judge_model(self, spec: JudgeModelSpec) -> JudgeModel:
+        if self.judges is None:
+            raise JudgeUnavailable(
+                f"judge model {spec.label} cannot be made: this Workspace was opened "
+                "without judge models (open it with bench.wiring.open_workspace)"
+            )
+        try:
+            return self.judges(spec)
+        except MissingSecret as exc:
+            raise JudgeUnavailable(f"judge model {spec.label}: {exc}") from exc
 
     def run_ids(self) -> tuple[str, ...]:
         """The id of every Run under runs/, newest first, for choosing one to resume."""
