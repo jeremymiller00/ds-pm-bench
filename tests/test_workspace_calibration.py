@@ -1,11 +1,14 @@
+import datetime
+import json
 from pathlib import Path
 
 import pytest
 
-from bench import CalibrationError, Workspace
+from bench import CalibrationError, JudgeClearanceError, Workspace
 from test_workspace_candidates import candidate, write_candidate
 from test_workspace_judging import (
     CANDIDATE,
+    DAY,
     OUTPUT,
     FakeJudges,
     private_run,
@@ -134,3 +137,108 @@ def test_a_spot_checked_output_can_join_the_calibration_set(ws_dir: Path):
     item = ws.add_calibration_item(run.id, "T1.1")
 
     assert [b.id for b in ws.unscored_calibration_items()] == [item.id]
+
+
+class ScriptedJudge:
+    """A JudgeModel scoring each Output by a script keyed on the Output's text."""
+
+    def __init__(self, by_output: dict[str, dict[str, int]]):
+        self.by_output = by_output
+        self.requests = []
+
+    def judge(self, request) -> str:
+        self.requests.append(request)
+        given = self.by_output.get(request.output, {})
+        return json.dumps({"scores": {
+            c.id: {"score": given.get(c.id, 4), "reason": "ok."} for c in request.criteria
+        }})
+
+
+def calibration_set(ws: Workspace, human: list[dict], judged: list[dict]) -> list[str]:
+    """One item per Run, Run i's Output being 'output i'; scores the human's side."""
+    item_ids = []
+    for i, human_scores in enumerate(human):
+        run = ws.start_run(CANDIDATE, on=DAY + datetime.timedelta(days=i))
+        run.record_output("T1.1", raw="draft", final=f"output {i}", active_seconds=1,
+                          latency_seconds=1, cost_usd=None)
+        item = ws.add_calibration_item(run.id, "T1.1")
+        ws.score_calibration_item(item.id, scores(**human_scores))
+        item_ids.append(item.id)
+    assert len(judged) == len(human)
+    return item_ids
+
+
+def judges_for(judged: list[dict]) -> FakeJudges:
+    script = {f"output {i}": s for i, s in enumerate(judged)}
+    return FakeJudges(**{"openai/gpt-6": ScriptedJudge(script)})
+
+
+HUMAN = [{"clarity": 1, "correctness": 1}, {"clarity": 2, "correctness": 5},
+         {"clarity": 3, "correctness": 1}, {"clarity": 4, "correctness": 5},
+         {"clarity": 5, "correctness": 3}]
+JUDGED = [{"clarity": 1, "correctness": 5}, {"clarity": 2, "correctness": 1},
+          {"clarity": 3, "correctness": 5}, {"clarity": 4, "correctness": 1},
+          {"clarity": 4, "correctness": 3}]
+
+
+def test_the_judge_scores_the_calibration_set_blind_to_the_human(ws_dir: Path):
+    judges = judges_for(JUDGED)
+    ws = Workspace.open(ws_dir, judges=judges)
+    item_ids = calibration_set(ws, HUMAN, JUDGED)
+
+    judged = ws.judge_calibration_set()
+
+    assert [j.task_id for j in judged] == item_ids
+    judge = judges.by_label["openai/gpt-6"]
+    assert judge.requests[0].output == "output 0"
+    assert CANDIDATE not in judge.requests[0].render()
+    item = ws.calibration_items()[1]
+    assert item.judge_scores[ws.judge_setup.hash]["correctness"] == 1
+    assert ws.judge_calibration_set() == ()  # nothing left for this Judge Setup
+
+
+def test_agreement_per_criterion_is_share_within_one_point_and_weighted_kappa(ws_dir):
+    ws = Workspace.open(ws_dir, judges=judges_for(JUDGED))
+    calibration_set(ws, HUMAN, JUDGED)
+    ws.judge_calibration_set()
+
+    agreement = ws.calibration_agreement()
+
+    clarity = agreement.criteria["clarity"]
+    assert (clarity.items, clarity.within_one_point) == (5, 1.0)
+    assert clarity.weighted_kappa == pytest.approx(16 / 17)
+    correctness = agreement.criteria["correctness"]
+    assert correctness.within_one_point == pytest.approx(0.2)
+    assert correctness.weighted_kappa == pytest.approx(-1.0)
+    # every other Criterion: both always 4, so kappa is undefined
+    assert agreement.criteria["format_fit"].within_one_point == 1.0
+    assert agreement.criteria["format_fit"].weighted_kappa is None
+    assert agreement.judge_setup_hash == ws.judge_setup.hash
+
+
+def test_kappa_matches_a_worked_example_off_the_diagonal(ws_dir: Path):
+    human = [{"clarity": s} for s in (2, 3, 3, 4, 5, 1)]
+    judged = [{"clarity": s} for s in (3, 3, 2, 5, 5, 2)]
+    ws = Workspace.open(ws_dir, judges=judges_for(judged))
+    calibration_set(ws, human, judged)
+    ws.judge_calibration_set()
+
+    assert ws.calibration_agreement().criteria["clarity"].weighted_kappa == pytest.approx(0.8)
+
+
+def test_a_private_item_is_refused_to_a_judge_without_private_clearance(private_ws):
+    ws_dir, private = private_ws
+    judges = FakeJudges()
+    ws = Workspace.open(ws_dir, judges=judges)
+    ws.add_calibration_item(private_run(ws).id, "T3.1")
+
+    with pytest.raises(JudgeClearanceError, match="private"):
+        ws.judge_calibration_set()
+    assert judges.by_label == {}  # no judge model was even made
+
+    write_judge_setup(ws_dir, clearance="public_and_private")
+    ws = Workspace.open(ws_dir, judges=judges)
+    [judging] = ws.judge_calibration_set()
+    reasons = (private / "calibration" / "judge" / f"{judging.task_id}.yaml").read_text()
+    assert "ok." in reasons
+    assert "ok." not in (ws_dir / "calibration" / f"{judging.task_id}.yaml").read_text()

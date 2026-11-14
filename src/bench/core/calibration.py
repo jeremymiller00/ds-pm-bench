@@ -65,6 +65,79 @@ class BlindCalibrationItem:
 
 
 @dataclass(frozen=True)
+class CriterionAgreement:
+    """How a Judge Setup's scores agree with the human's over the items both scored."""
+
+    items: int  # scores compared
+    within_one_point: float  # share of them at most 1 point apart
+    weighted_kappa: float | None  # quadratic weighted kappa; None when undefined
+
+
+@dataclass(frozen=True)
+class Agreement:
+    """A Judge Setup's agreement with the human scores on the Calibration Set.
+
+    criteria holds each Criterion's agreement; overall pools every Criterion's scores,
+    and is what Certification tests against the thresholds. unscored and unjudged list
+    the items still lacking a human score or this Judge Setup's score; they are left out.
+    """
+
+    judge_setup_hash: str
+    criteria: Mapping[str, CriterionAgreement]
+    overall: CriterionAgreement
+    unscored: tuple[str, ...]
+    unjudged: tuple[str, ...]
+    within_one_point_threshold: float
+    weighted_kappa_threshold: float
+
+    @property
+    def complete(self) -> bool:
+        """Every item has a human score and this Judge Setup's score, and there is one."""
+        return self.overall.items > 0 and not self.unscored and not self.unjudged
+
+    @property
+    def meets_thresholds(self) -> bool:
+        kappa = self.overall.weighted_kappa
+        return (
+            self.complete
+            and self.overall.within_one_point >= self.within_one_point_threshold
+            and kappa is not None
+            and kappa >= self.weighted_kappa_threshold
+        )
+
+
+def weighted_kappa(human: list[float], judge: list[float]) -> float | None:
+    """Quadratic weighted kappa of two raters' scores on a numeric scale.
+
+    1 - observed / expected squared disagreement, the expected one being that of the two
+    raters' scores paired at random; equal to Cohen's quadratic weighted kappa over the
+    1-5 categories, and defined for a Panel's half-point medians too. None when chance
+    disagreement is zero (both raters gave one score throughout).
+    """
+    n = len(human)
+    if n == 0:
+        return None
+    observed = sum((h - j) ** 2 for h, j in zip(human, judge, strict=True)) / n
+    mean_h, mean_j = sum(human) / n, sum(judge) / n
+    var_h = sum((h - mean_h) ** 2 for h in human) / n
+    var_j = sum((j - mean_j) ** 2 for j in judge) / n
+    expected = var_h + var_j + (mean_h - mean_j) ** 2
+    if expected == 0:
+        return None
+    return 1 - observed / expected
+
+
+def criterion_agreement(human: list[float], judge: list[float]) -> CriterionAgreement:
+    n = len(human)
+    within = sum(abs(h - j) <= 1 for h, j in zip(human, judge, strict=True))
+    return CriterionAgreement(
+        items=n,
+        within_one_point=within / n if n else 0.0,
+        weighted_kappa=weighted_kappa(human, judge),
+    )
+
+
+@dataclass(frozen=True)
 class CalibrationSet:
     root: Path  # the Workspace root
     private_roots: tuple[Path, ...]
@@ -162,6 +235,36 @@ class CalibrationSet:
             for label, scores in judging.judges.items()
         }
         path.write_text(yaml.safe_dump(reasons, sort_keys=False))
+
+    def agreement(
+        self, setup_hash: str, within_one_point: float, kappa: float
+    ) -> Agreement:
+        """The Judge Setup's agreement with the human scores, with the thresholds."""
+        pairs: dict[str, tuple[list[float], list[float]]] = {}
+        unscored, unjudged = [], []
+        for item in self.items():
+            judged = item.judge_scores.get(setup_hash)
+            if item.human_scores is None:
+                unscored.append(item.id)
+            if judged is None:
+                unjudged.append(item.id)
+            if item.human_scores is None or judged is None:
+                continue
+            for cid in item.criteria:
+                human, judge = pairs.setdefault(cid, ([], []))
+                human.append(item.human_scores[cid])
+                judge.append(judged[cid])
+        all_human = [h for human, _ in pairs.values() for h in human]
+        all_judge = [j for _, judge in pairs.values() for j in judge]
+        return Agreement(
+            judge_setup_hash=setup_hash,
+            criteria={cid: criterion_agreement(h, j) for cid, (h, j) in pairs.items()},
+            overall=criterion_agreement(all_human, all_judge),
+            unscored=tuple(unscored),
+            unjudged=tuple(unjudged),
+            within_one_point_threshold=within_one_point,
+            weighted_kappa_threshold=kappa,
+        )
 
     def _record(self, item_id: str) -> dict[str, Any]:
         path = self.folder / f"{item_id}.yaml"

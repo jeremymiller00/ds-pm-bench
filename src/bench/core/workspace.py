@@ -21,7 +21,12 @@ from bench.core.adapters import (
 )
 from bench.core.attempts import Attempt
 from bench.core.automated import ReturnedOutput, load_returned, run_task
-from bench.core.calibration import BlindCalibrationItem, CalibrationItem, CalibrationSet
+from bench.core.calibration import (
+    Agreement,
+    BlindCalibrationItem,
+    CalibrationItem,
+    CalibrationSet,
+)
 from bench.core.candidates import (
     CANDIDATES_FOLDER,
     Candidate,
@@ -630,9 +635,7 @@ class Workspace:
         recorded, so judging again resumes. A same-family judge model marks every Task
         for a full human check.
         """
-        setup = self.judge_setup
-        if setup is None:
-            raise JudgeUnavailable(f"no Judge Setup: {JUDGE_FILE} is missing")
+        setup = self._require_judge_setup()
         if run.pending:
             raise RunNotFinished(
                 f"Run {run.id} is not finished: {', '.join(run.pending)} still pending; "
@@ -672,17 +675,8 @@ class Workspace:
                 gold_answer=task.gold_answer_path.read_text(),
                 output=run.final_output(task.id),
             )
-            judging = TaskJudging(
-                task_id=task.id,
-                judges={
-                    label: parse_reply(
-                        model.judge(request), request.criteria,
-                        f"judge model {label} on Task {task.id}",
-                    )
-                    for label, model in models.items()
-                },
-                same_family=family,
-            )
+            judging = _judging(task.id, request, models, same_family=family,
+                               where=f"Task {task.id}")
             run.record_judging(judging, setup)
             if not override_logged(self.root, run.id, setup.hash):
                 log_override(self.root, self.clock.today(), run.id, candidate.id, setup.hash)
@@ -718,6 +712,54 @@ class Workspace:
         Calibration Set item; scoring it again replaces the earlier scores. Scores not
         matching its Criteria raise CalibrationError and change nothing."""
         return self.calibration_set.record_human_scores(item_id, scores)
+
+    def judge_calibration_set(self) -> tuple[TaskJudging, ...]:
+        """Have the Judge Setup score every Calibration Set item it has not scored yet.
+
+        The Judge sees what it sees in a Run (input, Rubric, Gold Answer, final Output),
+        never the human scores or the Candidate; TaskJudging.task_id is the item id.
+        Refusals are raised before any judge model is called: no Judge Setup or judge
+        models (JudgeUnavailable), a private item to a Judge Setup without private
+        Clearance (JudgeClearanceError). Items scored before a malformed reply stay
+        recorded, so judging again resumes.
+        """
+        setup = self._require_judge_setup()
+        cal = self.calibration_set
+        items = [i for i in cal.items() if setup.hash not in i.judge_scores]
+        for item in items:
+            if item.visibility == Visibility.PRIVATE and (
+                setup.clearance != Clearance.PUBLIC_AND_PRIVATE
+            ):
+                raise JudgeClearanceError(
+                    f"calibration item {item.id} is private and Judge Setup {setup.hash} "
+                    f"is cleared for {setup.clearance}"
+                )
+        models = {spec.label: self._judge_model(spec) for spec in setup.models}
+        judged = []
+        for item in items:
+            blind = cal.blind(item.id)
+            request = JudgeRequest(prompt=setup.prompt, input=blind.input,
+                                   criteria=blind.criteria, gold_answer=blind.gold_answer,
+                                   output=blind.output)
+            judging = _judging(item.id, request, models, same_family=False)
+            cal.record_judging(item.id, judging, setup)
+            judged.append(judging)
+        return tuple(judged)
+
+    def calibration_agreement(self) -> Agreement:
+        """The current Judge Setup's agreement with the human scores on the Calibration
+        Set: per Criterion and pooled, the share within 1 point and the quadratic
+        weighted kappa, against the configured thresholds."""
+        setup = self._require_judge_setup()
+        thresholds = self.settings.calibration
+        return self.calibration_set.agreement(
+            setup.hash, thresholds.within_one_point, thresholds.weighted_kappa
+        )
+
+    def _require_judge_setup(self) -> JudgeSetup:
+        if self.judge_setup is None:
+            raise JudgeUnavailable(f"no Judge Setup: {JUDGE_FILE} is missing")
+        return self.judge_setup
 
     def _judge_model(self, spec: JudgeModelSpec) -> JudgeModel:
         if self.judges is None:
@@ -790,3 +832,24 @@ class Workspace:
     def decision_log(self) -> tuple[dict[str, Any], ...]:
         """Every Decision Log entry, oldest first, as written to decisions/."""
         return read_log(self.root)
+
+
+def _judging(
+    task_id: str,
+    request: JudgeRequest,
+    models: Mapping[str, JudgeModel],
+    *,
+    same_family: bool,
+    where: str | None = None,
+) -> TaskJudging:
+    """Every judge model's parsed reply to the request."""
+    where = where or f"calibration item {task_id}"
+    return TaskJudging(
+        task_id=task_id,
+        judges={
+            label: parse_reply(model.judge(request), request.criteria,
+                               f"judge model {label} on {where}")
+            for label, model in models.items()
+        },
+        same_family=same_family,
+    )
