@@ -43,10 +43,22 @@ async def test_candidates_tab_lists_version_adapter_baseline_gate_and_clearance(
         listed = rows(app)
 
     assert listed == [
-        ["claude@opus-5-5", "claude-opus-5-5", "automated", "Baseline", "pass",
+        ["claude@opus-5-5", "claude-opus-5-5 (Lineage #1)", "automated", "Baseline", "pass",
          "public_and_private"],
-        ["copilot@2", "2", "manual_assisted", "", "not reviewed", "none"],
+        ["copilot@2", "2 (Lineage #1)", "manual_assisted", "", "not reviewed", "none"],
     ]
+
+
+async def test_the_version_column_shows_the_position_in_the_lineage(workspace_dir: Path):
+    write_candidate(workspace_dir, "claude@opus-5-5", candidate())
+    write_candidate(workspace_dir, "claude@opus-5-5~3", candidate(baseline=True))
+
+    app = BenchApp(Workspace.open(workspace_dir))
+    async with app.run_test() as pilot:
+        await open_candidates(app, pilot)
+        listed = rows(app)
+
+    assert [row[:2] for row in listed] == [["claude@opus-5-5~3", "claude-opus-5-5 (Lineage #3)"]]
 
 
 def fill(app: BenchApp, values: dict[str, object]) -> None:
@@ -77,7 +89,7 @@ async def test_creating_the_first_candidate_makes_it_the_baseline(workspace_dir:
         )
         listed, shown = rows(app), status(app)
 
-    assert listed == [["claude@opus-5-5", "opus-5-5", "automated", "Baseline",
+    assert listed == [["claude@opus-5-5", "opus-5-5 (Lineage #1)", "automated", "Baseline",
                        "not reviewed", "none"]]
     assert "claude@opus-5-5 created" in shown
     c = Workspace.open(workspace_dir).candidate("claude@opus-5-5")

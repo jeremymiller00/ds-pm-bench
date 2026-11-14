@@ -112,4 +112,5 @@ class CandidateBrowser(Vertical):
 def candidate_row(c: Candidate) -> tuple[str, ...]:
     gate = "not reviewed" if c.gate is None else c.gate.result
     clearance = "none" if c.clearance is None else str(c.clearance)
-    return (c.id, c.version, c.adapter, "Baseline" if c.baseline else "", gate, clearance)
+    version = f"{c.version} (Lineage #{c.lineage_position})"
+    return (c.id, version, c.adapter, "Baseline" if c.baseline else "", gate, clearance)
